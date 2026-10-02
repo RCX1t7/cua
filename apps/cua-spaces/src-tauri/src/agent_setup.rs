@@ -131,6 +131,25 @@ pub async fn agent_setup_remove(agents: Vec<String>) -> Result<Vec<AgentRow>, St
     blocking(move |s| remove(&s, agents)).await
 }
 
+/// Refresh only integrations recorded as managed by Cua, preserving user edits.
+#[tauri::command]
+pub async fn agent_setup_update() -> Result<(), String> {
+    blocking(|s| {
+        let outcomes = s.update(Some(&server(&s))).map_err(|e| e.to_string())?;
+        let failures: Vec<_> = outcomes
+            .iter()
+            .filter(|o| o.change == Change::Failed)
+            .map(|o| o.detail.as_str())
+            .collect();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("; "))
+        }
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

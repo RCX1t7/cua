@@ -489,6 +489,7 @@ pub fn run() {
             agent_setup::agent_setup_detect,
             agent_setup::agent_setup_configure,
             agent_setup::agent_setup_remove,
+            agent_setup::agent_setup_update,
             agent_config::list_teleportable_apps,
             agent_config::set_teleport_policy,
             commands::host_status,
@@ -533,6 +534,15 @@ pub fn run() {
             keyvault::keyvault_release,
             keyvault::keyvault_approve,
             keyvault::keyvault_deny,
+            keyvault::keyvault_inventory,
+            keyvault::keyvault_favicons,
+            keyvault::keyvault_browse,
+            keyvault::keyvault_end_browse,
+            keyvault::keyvault_delete_items,
+            keyvault::keyvault_set_locked,
+            keyvault::keyvault_set_auto_wipe,
+            keyvault::keyvault_set_skip_unlock_prompt,
+            keyvault::keyvault_lock,
             telemetry::telemetry_status,
             telemetry::telemetry_set_enabled,
             telemetry::telemetry_acknowledge_notice,
@@ -549,6 +559,8 @@ pub fn run() {
             presence::presence_leave
         ])
         .setup(move |app| {
+            #[cfg(target_os = "windows")]
+            crate::biometric::register_app(app.handle().clone());
             let accessory_activation = false;
 
             // Webview data stays in the app's data directory (webview_data):

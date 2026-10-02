@@ -118,8 +118,13 @@ pub fn webview_data_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("webview")
 }
 
-/// The app's data directory (follows `HOME`).
+/// The app's data directory. An explicit Windows `CUA_HOME` also isolates
+/// UI settings and WebView2 data, without redirecting Windows known folders.
 pub fn app_data_dir<R: Runtime>(app: &impl Manager<R>) -> Result<PathBuf, String> {
+    #[cfg(target_os = "windows")]
+    if std::env::var_os("CUA_HOME").is_some_and(|value| !value.is_empty()) {
+        return Ok(crate::core::cua_home().join("spaces-app"));
+    }
     app.path()
         .app_data_dir()
         .map_err(|e| format!("no app data directory: {e}"))

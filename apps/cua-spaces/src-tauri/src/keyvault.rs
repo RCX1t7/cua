@@ -22,11 +22,12 @@
 //! (`cua-spaces-app-core::keyvault::client`), shared with the SwiftUI app;
 //! this file only exposes it as Tauri commands.
 
+use cua_keyvault::broker::LockOutcome;
 pub use cua_spaces_app_core::keyvault::client::{
     DirectTransport, KeyvaultCommands, KvTransport, SocketTransport, AUDIT_TAIL,
 };
 use cua_spaces_app_core::keyvault::client::{KvFailure, Zeroizing};
-use cua_spaces_app_core::keyvault::{KeyvaultOverview, KvGrant, KvItem};
+use cua_spaces_app_core::keyvault::{KeyvaultOverview, KvFavicon, KvGrant, KvInventory, KvItem};
 use serde::Deserialize;
 
 /// The production commands: the daemon's socket in `$CUA_HOME`.
@@ -152,4 +153,63 @@ pub async fn keyvault_approve(
 #[tauri::command]
 pub async fn keyvault_deny(state: tauri::State<'_, KeyvaultState>, request_id: String) -> Cmd<()> {
     state.0.deny(&request_id).await.map_err(msg)
+}
+
+#[tauri::command]
+pub async fn keyvault_inventory(
+    state: tauri::State<'_, KeyvaultState>,
+    app: String,
+    profile: Option<String>,
+) -> Cmd<KvInventory> {
+    state.0.inventory(&app, profile).await.map_err(msg)
+}
+
+#[tauri::command]
+pub async fn keyvault_favicons(state: tauri::State<'_, KeyvaultState>) -> Cmd<Vec<KvFavicon>> {
+    Ok(state.0.favicons().await)
+}
+
+#[tauri::command]
+pub async fn keyvault_browse(state: tauri::State<'_, KeyvaultState>) -> Cmd<u64> {
+    state.0.browse().await.map_err(msg)
+}
+
+#[tauri::command]
+pub async fn keyvault_end_browse(state: tauri::State<'_, KeyvaultState>) -> Cmd<()> {
+    state.0.end_browse().await.map_err(msg)
+}
+
+#[tauri::command]
+pub async fn keyvault_delete_items(
+    state: tauri::State<'_, KeyvaultState>,
+    item_ids: Vec<String>,
+) -> Cmd<Vec<String>> {
+    state.0.delete_items(&item_ids).await.map_err(msg)
+}
+
+#[tauri::command]
+pub async fn keyvault_set_locked(
+    state: tauri::State<'_, KeyvaultState>,
+    item_ids: Vec<String>,
+    locked: bool,
+) -> Cmd<LockOutcome> {
+    state.0.set_locked(&item_ids, locked).await.map_err(msg)
+}
+
+#[tauri::command]
+pub async fn keyvault_set_auto_wipe(state: tauri::State<'_, KeyvaultState>, on: bool) -> Cmd<()> {
+    state.0.set_auto_wipe(on).await.map_err(msg)
+}
+
+#[tauri::command]
+pub async fn keyvault_set_skip_unlock_prompt(
+    state: tauri::State<'_, KeyvaultState>,
+    on: bool,
+) -> Cmd<()> {
+    state.0.set_skip_unlock_prompt(on).await.map_err(msg)
+}
+
+#[tauri::command]
+pub async fn keyvault_lock(state: tauri::State<'_, KeyvaultState>) -> Cmd<()> {
+    state.0.lock().await.map_err(msg)
 }
