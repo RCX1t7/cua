@@ -147,6 +147,7 @@ pub fn cua_home() -> PathBuf {
 /// The `cua` binary: `$CUA_BIN`, a `cua` next to the app executable
 /// (bundled sidecar), then `cua` on `PATH`.
 pub fn find_cua_bin() -> Option<PathBuf> {
+    let binary_name = if cfg!(windows) { "cua.exe" } else { "cua" };
     if let Some(p) = non_empty_env("CUA_BIN").map(PathBuf::from) {
         if p.is_file() {
             return Some(p);
@@ -156,14 +157,14 @@ pub fn find_cua_bin() -> Option<PathBuf> {
         .ok()
         .and_then(|e| e.parent().map(Path::to_path_buf))
     {
-        let sidecar = dir.join("cua");
+        let sidecar = dir.join(binary_name);
         if sidecar.is_file() {
             return Some(sidecar);
         }
     }
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
-        .map(|d| d.join("cua"))
+        .map(|d| d.join(binary_name))
         .find(|p| p.is_file())
 }
 

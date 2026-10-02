@@ -3,8 +3,6 @@
 
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-// The webview build has no Node types; tests run in Node.
-// @ts-expect-error node:fs is untyped here
 import { readFileSync } from "node:fs";
 import { afterEach } from "vitest";
 

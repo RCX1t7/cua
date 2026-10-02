@@ -9,8 +9,6 @@ import { onboardingCopy } from "../model/onboarding";
 import { createFakeInstallerBridge } from "../native/installer";
 import type { TelemetryBridge } from "../native/telemetry";
 import type { TelemetrySignal } from "../model/telemetry";
-// The webview build has no Node types; tests run in Node.
-// @ts-expect-error node:fs is untyped here
 import { readFileSync } from "node:fs";
 import { fakeDrive, MOUNT_OFF, MOUNTED, NEEDS_APPROVAL } from "../test/fakeDrive";
 import { DRIVE_APPROVAL_POLL_MS, DRIVE_PROMPT_POLL_MS, InstallerFlow, type InstallerAuth, summarizeAgent } from "./InstallerFlow";

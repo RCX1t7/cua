@@ -37,6 +37,23 @@ fn strip_verbatim(path: PathBuf) -> PathBuf {
     }
 }
 
+// protoc 29 on Windows converts absolute command-line paths through the
+// system code page. Relative ASCII paths work even in a Unicode checkout.
+fn relative_to(path: &std::path::Path, base: &std::path::Path) -> PathBuf {
+    let mut ancestor = base;
+    let mut relative = PathBuf::new();
+    loop {
+        if let Ok(rest) = path.strip_prefix(ancestor) {
+            return relative.join(rest);
+        }
+        let Some(parent) = ancestor.parent() else {
+            return path.to_path_buf();
+        };
+        relative.push("..");
+        ancestor = parent;
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     // canonicalize() yields a verbatim `\\?\D:\...` path on Windows, which
@@ -54,9 +71,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         proto_root.join("buf.yaml").display()
     );
     println!("cargo:rerun-if-env-changed=PROTOC");
+    println!("cargo:rerun-if-env-changed=PROTOC_INCLUDE");
 
     let mut prost_config = prost_build::Config::new();
     prost_config.prost_types_path("::pbjson_types");
+
+    // Keep the contract and generated Rust files in their canonical places;
+    // only protoc's arguments are relative to the contract directory.
+    env::set_current_dir(&proto_root)?;
+    let relative_files: Vec<PathBuf> = PROTOS.iter().map(PathBuf::from).collect();
+    let protoc_descriptor = relative_to(&descriptor_path, &proto_root);
+    if let Some(include) = env::var_os("PROTOC_INCLUDE") {
+        prost_config.protoc_arg(format!(
+            "--proto_path={}",
+            relative_to(std::path::Path::new(&include), &proto_root).display()
+        ));
+    }
 
     tonic_prost_build::configure()
         .build_client(true)
@@ -68,9 +98,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .client_mod_attribute(".", r#"#[cfg(feature = "client")]"#)
         .server_mod_attribute(".", r#"#[cfg(feature = "server")]"#)
         .compile_well_known_types(false)
-        .file_descriptor_set_path(&descriptor_path)
+        .file_descriptor_set_path(&protoc_descriptor)
         .emit_rerun_if_changed(false)
-        .compile_with_config(prost_config, &files, std::slice::from_ref(&proto_root))?;
+        .compile_with_config(prost_config, &relative_files, &[PathBuf::from(".")])?;
 
     // Canonical proto3 JSON (serde) impls. Always generated so the file set
     // in OUT_DIR is feature-independent; included only with `serde`.
