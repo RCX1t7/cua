@@ -288,8 +288,8 @@ impl Response {
         }
     }
 
-    // Stage frames stream over the Unix socket only.
-    #[cfg(unix)]
+    // Stage frames use the same bounded framing on Unix sockets/Windows pipes.
+    #[cfg(any(unix, target_os = "windows"))]
     fn stage(s: TeleportStage) -> Self {
         Self {
             ok: true,
