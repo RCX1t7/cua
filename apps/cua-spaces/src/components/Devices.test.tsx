@@ -178,7 +178,7 @@ describe("approval sheet", () => {
     expect(approve).toBeDisabled();
     fireEvent.change(screen.getByPlaceholderText("XXXX-XXXX"), { target: { value: "k7qx m2rp" } });
     expect(screen.getByPlaceholderText("XXXX-XXXX")).toHaveValue("K7QX-M2RP");
-    expect(approve).toBeEnabled();
+    await waitFor(() => expect(approve).toBeEnabled());
     fireEvent.click(approve);
     expect(await screen.findByRole("alert")).toHaveTextContent("authentication was cancelled");
     expect(bridge.calls).toContain("approve:K7QX-M2RP:");
@@ -206,6 +206,7 @@ describe("approval sheet", () => {
       <ApproveSheet bridge={bridge} prompt={prompt} devices={snapshot.devices} onClose={() => {}} onDone={onDone} />,
     );
     fireEvent.change(screen.getByPlaceholderText("XXXX-XXXX"), { target: { value: "z9wy4tpn" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The code expired.");
     expect(screen.getByText(/by ID instead/)).toBeInTheDocument();
@@ -219,6 +220,7 @@ describe("approval sheet", () => {
     const onDone = vi.fn();
     const { unmount } = render(<ApproveSheet bridge={bridge} prompt={prompt} onClose={() => {}} onDone={onDone} />);
     fireEvent.change(screen.getByPlaceholderText("XXXX-XXXX"), { target: { value: "K7QXM2RP" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
     unmount();
