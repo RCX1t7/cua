@@ -221,10 +221,10 @@ export default function TeleportDropZone({
         data-busy={busy ? "true" : undefined}
       >
         <Sym name={over ? copy.teleportSymbolActive : copy.teleportSymbol} size={22} className="sl-dropzone-icon" />
-        <p className="sl-dropzone-caption">{windowsHost ? "Drop files here to send them to this Space" : copy.dropCaption}</p>
+        <p className="sl-dropzone-caption">{windowsHost ? "Drop files to send them, or drag an app window here to review its transfer" : copy.dropCaption}</p>
         {windowsHost && (
           <p className="sl-dropzone-status" role="note">
-            Dragging another app's window into a Space is not available on Windows. App sign-in transfer depends on its provider; sign in inside the Space when unavailable.
+            Window dragging opens app review. Session transfer depends on the provider and native approval; sign in inside the Space when transfer is unavailable.
           </p>
         )}
         <div className="sl-dropzone-actions">

@@ -178,10 +178,6 @@ export function TeleportPicker({
               className="hp-tab"
               data-active={tab === t.id}
               aria-selected={tab === t.id}
-              disabled={hostOs() === "windows" && t.id === "space"}
-              title={hostOs() === "windows" && t.id === "space"
-                ? "Listing this computer's open windows is not available on Windows yet"
-                : undefined}
               onClick={() => setTab(t.id)}
             >
               {t.label}
@@ -190,7 +186,7 @@ export function TeleportPicker({
         </div>
         {hostOs() === "windows" && (
           <p className="hp-status-hint" role="note">
-            Windows cannot list or drag this computer's app windows yet. App transfers follow each provider's capabilities and consent; sign in inside the Space when sign-in transfer is unavailable.
+            Choose an open window or drag it to a Space to review its app. Session transfer depends on the provider and native approval; sign in inside the Space when transfer is unavailable.
           </p>
         )}
         {tab === "apps" ? (
