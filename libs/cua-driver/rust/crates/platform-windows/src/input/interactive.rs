@@ -151,7 +151,7 @@ impl InteractiveInputSession {
         self.validate_target()?;
         if let (true, Some((_, id))) = (self.foreground(), self.config.window) {
             if unsafe { GetForegroundWindow() } != hwnd(id)
-                && !super::force_foreground_assisted(hwnd(id)).0
+                && !unsafe { super::force_foreground_assisted(hwnd(id)) }.0
             {
                 return Err(InteractiveInputError::WouldRequireActivation(
                     "Windows did not activate the exact interactive target; no input was sent"
