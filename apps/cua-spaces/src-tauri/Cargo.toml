@@ -154,6 +154,7 @@ windows = { version = "0.61", features = [
 windows-future = "0.2"
 
 [dev-dependencies]
+cua-media-protocol = { path = "../../../libs/cua/crates/cua-media-protocol" }
 tempfile = "3"
 libc = "0.2"
 # The live harness (tests/live_docker.rs) attaches to the returned ticket

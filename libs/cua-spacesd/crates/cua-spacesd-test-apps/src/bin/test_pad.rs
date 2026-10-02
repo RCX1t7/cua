@@ -53,9 +53,9 @@ mod windows_main {
         CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
         GetWindowRect, PostQuitMessage, RegisterClassW, SetTimer, SetWindowTextW, ShowWindow,
         TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, MSG, SW_SHOWDEFAULT,
-        WINDOW_EX_STYLE, WM_ACTIVATE, WM_CHAR, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN,
-        WM_MBUTTONDOWN, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_TIMER, WNDCLASSW,
-        WS_OVERLAPPEDWINDOW,
+        WINDOW_EX_STYLE, WM_ACTIVATE, WM_CHAR, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+        WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN,
+        WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPEDWINDOW,
     };
 
     struct PadState {
@@ -264,6 +264,23 @@ mod windows_main {
                 WM_KEYDOWN => {
                     log_line(serde_json::json!({"event": "key", "vk": wparam.0 as u32}));
                     LRESULT(0)
+                }
+                WM_KEYUP => {
+                    log_line(serde_json::json!({"event": "key_up", "vk": wparam.0 as u32}));
+                    DefWindowProcW(hwnd, message, wparam, lparam)
+                }
+                WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP => {
+                    let button = match message {
+                        WM_LBUTTONUP => "left",
+                        WM_RBUTTONUP => "right",
+                        _ => "middle",
+                    };
+                    log_line(serde_json::json!({
+                        "event": "pointer_up", "button": button,
+                        "client_x": (lparam.0 & 0xffff) as i16 as i32,
+                        "client_y": ((lparam.0 >> 16) & 0xffff) as i16 as i32,
+                    }));
+                    DefWindowProcW(hwnd, message, wparam, lparam)
                 }
                 WM_ACTIVATE => {
                     log_line(serde_json::json!({
