@@ -31,10 +31,9 @@ use anyhow::{bail, Result};
 use core::ffi::c_void;
 use std::sync::Mutex;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HANDLE, HWND, POINT, RECT};
-use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Controls::{
     CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, HSYNTHETICPOINTERDEVICE,
     POINTER_FEEDBACK_DEFAULT, POINTER_TYPE_INFO, POINTER_TYPE_INFO_0,
@@ -47,10 +46,9 @@ use windows::Win32::UI::Input::Pointer::{
     POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO, POINTER_PEN_INFO, POINTER_TOUCH_INFO,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
-    IsWindow, LockSetForegroundWindow, SetCursorPos, SetForegroundWindow, SetWindowLongPtrW,
-    WindowFromPoint, GA_ROOT, GWL_EXSTYLE, LSFW_LOCK, LSFW_UNLOCK, PT_PEN, PT_TOUCH,
-    WS_EX_NOACTIVATE,
+    GetAncestor, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, IsWindow,
+    LockSetForegroundWindow, SetCursorPos, SetForegroundWindow, SetWindowLongPtrW, WindowFromPoint,
+    GA_ROOT, GWL_EXSTYLE, LSFW_LOCK, LSFW_UNLOCK, PT_PEN, PT_TOUCH, WS_EX_NOACTIVATE,
 };
 
 #[derive(Default)]
@@ -108,44 +106,61 @@ impl Drop for ForegroundLockGuard {
     }
 }
 
-/// Bring `target` to the foreground using the AttachThreadInput trick, which
-/// inherits the current foreground thread's FG-lock token so the swap is
-/// honored even on a foreground-locked session without UIAccess (mirrors the
-/// `bring_to_front` tool). Single attach, no retry loop — bounded. Returns
-/// whether `target` actually became foreground.
+/// Request and verify an exact-window foreground transition without joining
+/// another thread's input queue. SetForegroundWindow on attached queues can
+/// wait indefinitely for the other GUI thread; a retry count cannot bound it.
+/// Keep the historical helper name for existing background-restore callers.
+/// No worker is detached and no activation is retried after this call returns.
 pub(crate) unsafe fn force_foreground_attached(target: HWND) -> bool {
-    let cur = GetForegroundWindow();
-    if cur == target {
+    let target_addr = target.0 as usize as u64;
+    let Some(owner) = crate::win32::window_owner_pid(target_addr) else {
+        return false;
+    };
+    if GetForegroundWindow() == target {
         return true;
     }
-    let my_tid = GetCurrentThreadId();
-    let mut pid = 0u32;
-    let cur_tid = GetWindowThreadProcessId(cur, Some(&mut pid));
-    let attached = cur_tid != 0 && cur_tid != my_tid;
-    if attached {
-        let _ = AttachThreadInput(my_tid, cur_tid, true);
-    }
     let _ = SetForegroundWindow(target);
-    if attached {
-        let _ = AttachThreadInput(my_tid, cur_tid, false);
+    // A different input queue receives the activation asynchronously. Poll
+    // read-only state instead of AttachThreadInput or a synchronous message.
+    let deadline = Instant::now() + Duration::from_millis(150);
+    loop {
+        if crate::win32::window_owner_pid(target_addr) != Some(owner) {
+            return false;
+        }
+        if GetForegroundWindow() == target {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        sleep(Duration::from_millis(10));
     }
-    GetForegroundWindow() == target
 }
 
 /// Retry an explicit visible foreground transition after a reserved no-name
 /// key grants this process the most-recent-input token. The key has no
 /// application meaning; the retry count keeps the transition bounded.
 pub(crate) unsafe fn force_foreground_assisted(target: HWND) -> (bool, bool) {
+    let target_addr = target.0 as usize as u64;
+    let Some(owner) = crate::win32::window_owner_pid(target_addr) else {
+        return (false, false);
+    };
     if unsafe { force_foreground_attached(target) } {
         return (true, false);
     }
 
+    if crate::win32::window_owner_pid(target_addr) != Some(owner) {
+        return (false, false);
+    }
     const VK_NONAME: u8 = 0xFC;
     unsafe {
         keybd_event(VK_NONAME, 0, KEYBD_EVENT_FLAGS(0), 0);
         keybd_event(VK_NONAME, 0, KEYEVENTF_KEYUP, 0);
     }
     for _ in 0..3 {
+        if crate::win32::window_owner_pid(target_addr) != Some(owner) {
+            return (false, true);
+        }
         if unsafe { force_foreground_attached(target) } {
             return (true, true);
         }
