@@ -64,6 +64,7 @@ type EventProc = unsafe extern "system" fn(Handle, u32, Handle, i32, i32, u32, u
 #[link(name = "user32")]
 unsafe extern "system" {
     fn SetThreadDpiAwarenessContext(context: Handle) -> Handle;
+    fn GetWindowDpiAwarenessContext(hwnd: Handle) -> Handle;
     fn EnumWindows(callback: unsafe extern "system" fn(Handle, isize) -> i32, data: isize) -> i32;
     fn IsWindow(hwnd: Handle) -> i32;
     fn IsWindowVisible(hwnd: Handle) -> i32;
@@ -133,6 +134,13 @@ struct DpiContext(Handle);
 impl DpiContext {
     fn enter() -> Self {
         Self(unsafe { SetThreadDpiAwarenessContext(-4) })
+    }
+    fn for_window(hwnd: Handle) -> Self {
+        // PrintWindow executes the selected app's painter. An unaware app
+        // paints in its virtualized dimensions; using our physical dimensions
+        // would leave unpainted right/bottom margins on scaled monitors.
+        let context = unsafe { GetWindowDpiAwarenessContext(hwnd) };
+        Self(unsafe { SetThreadDpiAwarenessContext(if context == 0 { -4 } else { context }) })
     }
 }
 impl Drop for DpiContext {
@@ -326,7 +334,7 @@ pub fn capture(id: u32, max_width: usize) -> Option<Vec<u8>> {
     rx.recv_timeout(Duration::from_secs(1)).ok().flatten()
 }
 fn capture_window(hwnd: Handle, max_width: usize) -> Option<Vec<u8>> {
-    let _dpi = DpiContext::enter();
+    let _dpi = DpiContext::for_window(hwnd);
     info(hwnd)?;
     if unsafe { IsHungAppWindow(hwnd) } != 0 {
         return None;

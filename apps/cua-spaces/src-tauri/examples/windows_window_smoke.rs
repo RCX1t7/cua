@@ -189,8 +189,11 @@ mod windows {
                 [0x18, 0x22, 0x22],
             ];
             let (mut matched, mut sampled) = (0u64, 0u64);
-            for y in image.height / 3..image.height * 2 / 3 {
-                for x in image.width / 3..image.width * 2 / 3 {
+            // The bottom-right interior catches DPI-unaware apps painting
+            // logical content into an oversized physical DIB: a center-only
+            // check would miss the unpainted black right/bottom padding.
+            for y in image.height / 2..image.height * 9 / 10 {
+                for x in image.width / 2..image.width * 9 / 10 {
                     let i = ((y * image.width + x) * 4) as usize;
                     let rgb = [pixels[i], pixels[i + 1], pixels[i + 2]];
                     sampled += 1;
