@@ -19,7 +19,7 @@
  *   each gets its own media session in a draggable panel.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import type { RemoteWindow } from "../model/teleport";
 import type {
@@ -32,7 +32,7 @@ import type {
 import { createTeleportBridge } from "../native/teleport";
 import { telemetryBridge, type TelemetryBridge } from "../native/telemetry";
 import { PresenceOverlay } from "./presence/PresenceOverlay";
-import { MediaSession, type MediaStatus, type MediaTicket, type SessionOpenedPayload } from "@cua/spacesd-html5/core/mediaSession";
+import { MediaSession, type InteractiveInputAcknowledgement, type MediaStatus, type MediaTicket, type SessionOpenedPayload } from "@cua/spacesd-html5/core/mediaSession";
 
 export { applyCursorShape, cursorShapeToCss } from "./cursorShape";
 
@@ -81,11 +81,19 @@ export interface MediaCanvasProps {
   interactive: boolean;
   audio: boolean;
   className?: string;
+  style?: CSSProperties;
+  label?: string;
   onStatus?: (status: MediaStatus, detail?: string) => void;
   onGeometry?: (width: number, height: number) => void;
   onOpened?: (opened: SessionOpenedPayload) => void;
   onTitle?: (title: string) => void;
   onGone?: (reason: string) => void;
+  onServerError?: (payload: Record<string, unknown>) => void;
+  onInputAcknowledgement?: (result: InteractiveInputAcknowledgement) => void;
+  onFrame?: (width: number, height: number) => void;
+  /** The last rendered canvas, before teardown (for a disconnected preview). */
+  onLastFrame?: (canvas: HTMLCanvasElement) => void;
+  onStopped?: (sessionId: string) => void;
   /** Receives the live session (for geometry sync), or null on teardown. */
   sessionRef?: (session: MediaSession | null) => void;
   /** Bump to force a fresh attach (user "Retry"). */
@@ -111,7 +119,10 @@ export function MediaCanvas(props: MediaCanvasProps) {
     let height = 0;
     const cb = () => latest.current;
     const start = (ticket: MediaTicket) => {
-      if (cancelled) return;
+      if (cancelled) {
+        if (ticket.mediaSessionId) cb().onStopped?.(ticket.mediaSessionId);
+        return;
+      }
       startedAt = performance.now();
       session = new MediaSession({
         canvas,
@@ -127,6 +138,9 @@ export function MediaCanvas(props: MediaCanvasProps) {
         onOpened: (o) => cb().onOpened?.(o),
         onTitle: (t) => cb().onTitle?.(t),
         onGone: (r) => cb().onGone?.(r),
+        onServerError: (p) => cb().onServerError?.(p),
+        onInputAcknowledgement: (r) => cb().onInputAcknowledgement?.(r),
+        onFrame: (w, h) => cb().onFrame?.(w, h),
       });
       cb().sessionRef?.(session);
       session.start();
@@ -147,6 +161,7 @@ export function MediaCanvas(props: MediaCanvasProps) {
       cancelled = true;
       if (session) {
         const stats = session.stats;
+        if (stats.framesDecoded > 0) cb().onLastFrame?.(canvas);
         (cb().telemetry ?? telemetryBridge()).recordStream({
           codec: stats.codec,
           frames: stats.framesReceived,
@@ -154,14 +169,16 @@ export function MediaCanvas(props: MediaCanvasProps) {
           durationMs: performance.now() - startedAt,
         });
       }
+      const sessionId = session?.id;
       session?.stop();
+      if (sessionId) cb().onStopped?.(sessionId);
       cb().sessionRef?.(null);
     };
     // The ticket source and interactivity define the session; callbacks are read live.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.ticket?.wsUrl, props.open, props.interactive, props.audio, props.generation]);
 
-  return <canvas ref={canvasRef} className={props.className ?? "ws-frame-canvas"} tabIndex={0} />;
+  return <canvas ref={canvasRef} className={props.className ?? "ws-frame-canvas"} style={props.style} aria-label={props.label} tabIndex={0} />;
 }
 
 // ---------------------------------------------------------------- WindowStream
