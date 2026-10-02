@@ -441,7 +441,7 @@ impl InstallerCommands {
 
     /// The real machine: agent setup in-process through the SDK; the MCP
     /// entry launches the installed CLI when present, else the bundled one.
-    pub fn from_env(exe: &Path) -> Self {
+    pub fn from_env(exe: &Path) -> Result<Self, String> {
         let cli = CliInstaller::from_env(exe);
         let target = cli.target();
         let mcp_command = if target.exists() {
@@ -452,10 +452,10 @@ impl InstallerCommands {
                 .or_else(|| first_on_path(&cli.path_env, cli_file_name()))
         };
         let agents: Arc<dyn AgentSetupBackend> = Arc::new(SdkAgentSetup::new(
-            cua_agent_setup::AgentSetup::from_env(),
+            crate::agent_setup::setup_for_app()?,
             mcp_command,
         ));
-        Self::new(cli, agents)
+        Ok(Self::new(cli, agents))
     }
 
     pub async fn cli_plan(&self) -> CliInstallPlan {

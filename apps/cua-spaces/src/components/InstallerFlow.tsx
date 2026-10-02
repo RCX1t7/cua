@@ -944,7 +944,7 @@ function AgentsStep({
           <button type="button" className="primary-button" data-owns-enter onClick={() => setAttempt((n) => n + 1)}>
             {copy.tryAgain}
           </button>
-        ) : installed.length > 0 ? (
+        ) : installed.length > 0 || (!report && !error) ? (
           <button type="button" className="primary-button" data-owns-enter disabled={!canSetup} onClick={setup}>
             {busy ? copy.agentsSettingUp : copy.agentsSetUp}
           </button>

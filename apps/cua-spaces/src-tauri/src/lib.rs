@@ -626,7 +626,7 @@ pub fn run() {
             {
                 let exe = std::env::current_exe().unwrap_or_default();
                 app.manage(commands::InstallerState(std::sync::Arc::new(
-                    installer::InstallerCommands::from_env(&exe),
+                    installer::InstallerCommands::from_env(&exe)?,
                 )));
             }
 

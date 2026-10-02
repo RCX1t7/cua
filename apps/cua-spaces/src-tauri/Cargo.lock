@@ -1540,6 +1540,7 @@ dependencies = [
  "cua-fleet",
  "cua-host",
  "cua-keyvault",
+ "cua-media-protocol",
  "cua-proto",
  "cua-sandbox-core",
  "cua-spaces",
