@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/trycua/cua/compare/cua-spacesd-v0.2.2...cua-spacesd-v0.2.3) (2026-10-02)
+
+
+### Bug Fixes
+
+* never ship a CLI that pins an unpublished cua-spacesd ([#4473](https://github.com/trycua/cua/issues/4473)) ([da46c4b](https://github.com/trycua/cua/commit/da46c4bc85bc43f9641d3ce4b6f319e6d7b6c1a9))
+
 ## [0.2.2](https://github.com/trycua/cua/compare/cua-spacesd-v0.2.1...cua-spacesd-v0.2.2) (2026-10-02)
 
 
