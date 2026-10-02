@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: FSL-1.1-MIT
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Cua AI, Inc.
 
 //! Stateful Windows delivery for the shared interactive-input contract.
