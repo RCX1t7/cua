@@ -644,8 +644,8 @@ export function MainWindow({
           )}
           {sidebar.sections.map((section) => (
             <div key={section.title}>
-              <div className="dw-nav-section">{section.title}</div>
-              <ul className="dw-nav-list" role="listbox" aria-label={section.title}>
+              <div className="dw-nav-section">{section.title === 'This Mac' && hostOs() !== 'macos' ? 'This computer' : section.title}</div>
+              <ul className="dw-nav-list" role="listbox" aria-label={section.title === 'This Mac' && hostOs() !== 'macos' ? 'This computer' : section.title}>
                 {section.rows.map((row) => (
                   <SpaceRowItem
                     key={row.id}

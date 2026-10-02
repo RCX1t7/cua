@@ -434,7 +434,7 @@ function PickView({
             disabled={!primary.enabled}
             onClick={() => current && activate(current)}
           >
-            {primary.label}
+            {hostOs() === "macos" ? primary.label : primary.label.replace("This Mac", "This computer")}
           </button>
         </div>
       </footer>

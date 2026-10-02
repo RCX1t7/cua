@@ -497,7 +497,11 @@ export function SettingsPanel({
               {section.rows.map((row) => (
                 <SettingsRowItem
                   key={row.id}
-                  row={row}
+                  row={(os ?? hostOs()) === "windows" ? {
+                    ...row,
+                    label: row.id === "notch" ? "Spaces tab" : row.id === "mount" ? "Mount Cua Volume" : row.label === "In Finder at" ? "In File Explorer at" : row.label,
+                    button: row.button?.replace("Finder", "File Explorer") ?? null,
+                  } : row}
                   onPress={isStorage ? storage.press : press}
                   onChoose={isStorage ? storage.choose : choose}
                   onEdit={storage.edit}

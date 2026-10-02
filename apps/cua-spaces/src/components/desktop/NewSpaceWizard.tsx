@@ -4,6 +4,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { core } from "../../core";
+import { hostOs } from "../../model/host";
 import { NO_EXPERIMENTS, type Experiments } from "../../model/experiments";
 import type { Placement, SandboxImage } from "../../model/images";
 import type { Runtime } from "../../model/types";
@@ -322,7 +323,22 @@ export function NewSpaceWizard({
   useEffect(() => {
     setState((s) => core<WizardState>("wizard.reduce", { state: s, action: { type: "sync-default", location: defaultLocation }, env }));
   }, [defaultLocation, env]);
-  const v = core<WizardView>("wizard.view", { state, env });
+  const shared = core<WizardView>("wizard.view", { state, env });
+  // Only presentation of the local host changes; remote host names, the
+  // creation plan, runtime availability and the shared decisions stay intact.
+  const local = shared.placementId === "local";
+  const localCopy = (text: string) => hostOs() === "macos" ? text : text.replace(/\bThis Mac\b/g, "This computer").replace(/\bthis Mac\b/g, "this computer");
+  const v: WizardView = {
+    ...shared,
+    placements: shared.placements.map((option) => option.id === "local" ? { ...option, label: localCopy(option.label), detail: localCopy(option.detail) } : option),
+    runtimes: local ? shared.runtimes.map((runtime) => ({ ...runtime, label: localCopy(runtime.label) })) : shared.runtimes,
+    fields: local ? shared.fields.map((field) => ({ ...field, error: field.error ? localCopy(field.error) : field.error })) : shared.fields,
+    resourceFacts: local ? shared.resourceFacts.map((fact) => ({ ...fact, value: localCopy(fact.value), help: fact.help ? localCopy(fact.help) : fact.help })) : shared.resourceFacts,
+    summary: local ? shared.summary.map((fact) => fact.label === "Runs on" || fact.label === "Runtime" ? { ...fact, value: localCopy(fact.value) } : fact) : shared.summary,
+    diskNote: local && shared.diskNote ? localCopy(shared.diskNote) : shared.diskNote,
+    diskHelp: local && shared.diskHelp ? localCopy(shared.diskHelp) : shared.diskHelp,
+    resourcesError: local && shared.resourcesError ? localCopy(shared.resourcesError) : shared.resourcesError,
+  };
   const step = v.step;
 
   if (v.mode === "address") {
