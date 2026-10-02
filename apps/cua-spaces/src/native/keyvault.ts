@@ -11,23 +11,7 @@ import { hasTauri } from "./bridge";
  * the broker's `ListItems` is the redacted view and there is no "reveal".
  */
 
-export type KvItemKind = "browser_site" | "site_passwords" | "app_session";
-
-export interface KvCookieInfo {
-  name: string;
-  domain: string;
-  session: boolean;
-  expires_ms?: number;
-}
-
-export interface KvItemSummary {
-  cookies: KvCookieInfo[];
-  storage_origins: string[];
-  passwords: number;
-  files: string[];
-  keychain_services: string[];
-  bytes: number;
-}
+export type KvItemKind = "cookie" | "local_storage" | "password" | "file";
 
 export interface KvItemPolicy {
   allowed_targets: string[];
@@ -35,17 +19,20 @@ export interface KvItemPolicy {
   unattended: boolean;
 }
 
+/** The broker's ItemMeta: redacted metadata, never the secret value. */
 export interface KvItem {
   id: string;
   kind: KvItemKind;
-  label: string;
   provider_id: string;
   app_display: string;
-  site?: string;
-  account?: string;
+  domain?: string | null;
+  key: string;
+  path?: string | null;
   source: string;
-  summary: KvItemSummary;
-  warnings: string[];
+  session: boolean;
+  expires_ms?: number | null;
+  bytes: number;
+  blob?: string | null;
   identity_provider: boolean;
   policy: KvItemPolicy;
   created_ms: number;
@@ -54,8 +41,29 @@ export interface KvItem {
   record_digest: string;
 }
 
+export interface KvDomainCount {
+  domain: string;
+  cookies: number;
+  session_cookies: number;
+  local_storage: number;
+  passwords: number;
+  signin: boolean;
+  identity_provider: boolean;
+  unavailable: number;
+  unavailable_reason: string;
+}
+export interface KvInventory {
+  provider_id: string;
+  app_display: string;
+  domains: KvDomainCount[];
+  notes: string[];
+}
+export interface KvFavicon { site: string; png: string }
+export interface KvLockOutcome { changed: string[]; skipped: string[] }
+
 export type KvSigning =
   | { kind: "signed"; team_id: string; identifier: string; cdhash: string }
+  | { kind: "windows_signed"; certificate_sha256: string; publisher: string; executable_sha256: string }
   | { kind: "ad_hoc"; identifier: string; cdhash: string }
   | { kind: "unsigned" }
   | { kind: "unknown" };
@@ -73,7 +81,7 @@ export interface KvCaller {
 
 export type KvSelector =
   | { kind: "item"; id: string }
-  | { kind: "site"; app: string; site: string; account?: string }
+  | { kind: "site"; app: string; site: string }
   | { kind: "app"; app: string }
   | { kind: "login"; site: string };
 
@@ -164,6 +172,10 @@ export interface KvStatus {
   passphrase_available?: boolean;
   /** Protectors that can unlock this vault now ("macos-keychain", "passphrase", ...). */
   unlock_protectors?: string[];
+  auto_wipe?: boolean | null;
+  browse_until_ms?: number | null;
+  skip_unlock_prompt?: boolean | null;
+  reset_notice?: string | null;
 }
 
 export interface KvVerification {
@@ -191,6 +203,8 @@ export interface KeyvaultOverview {
   status?: KvStatus;
   serverVerified: boolean;
   items: KvItem[];
+  namesVisible: boolean;
+  itemsTotal: number;
   pending: KvPending[];
   grants: KvGrant[];
   rules: KvRule[];
@@ -203,6 +217,15 @@ export interface KeyvaultOverview {
 export interface KeyvaultBridge {
   readonly isNative: boolean;
   overview(): Promise<KeyvaultOverview>;
+  browse(): Promise<number>;
+  endBrowse(): Promise<void>;
+  inventory(app: string, profile?: string | null): Promise<KvInventory>;
+  favicons(): Promise<KvFavicon[]>;
+  lock(): Promise<void>;
+  setLocked(itemIds: string[], locked: boolean): Promise<KvLockOutcome>;
+  deleteItems(itemIds: string[]): Promise<string[]>;
+  setAutoWipe(on: boolean): Promise<void>;
+  setSkipUnlockPrompt(on: boolean): Promise<void>;
   /** Creates the vault with the OS key store; returns the recovery key to show once. */
   setup(): Promise<string | null>;
   /** Creates the vault with a passphrase (sent only to the broker, never kept). */
@@ -230,6 +253,15 @@ export function createTauriKeyvaultBridge(): KeyvaultBridge {
   return {
     isNative: true,
     overview: () => invoke<KeyvaultOverview>("keyvault_overview"),
+    browse: () => invoke<number>("keyvault_browse"),
+    endBrowse: () => invoke<void>("keyvault_end_browse"),
+    inventory: (app, profile) => invoke<KvInventory>("keyvault_inventory", { app, profile: profile ?? null }),
+    favicons: () => invoke<KvFavicon[]>("keyvault_favicons"),
+    lock: () => invoke<void>("keyvault_lock"),
+    setLocked: (itemIds, locked) => invoke<KvLockOutcome>("keyvault_set_locked", { itemIds, locked }),
+    deleteItems: (itemIds) => invoke<string[]>("keyvault_delete_items", { itemIds }),
+    setAutoWipe: (on) => invoke<void>("keyvault_set_auto_wipe", { on }),
+    setSkipUnlockPrompt: (on) => invoke<void>("keyvault_set_skip_unlock_prompt", { on }),
     setup: () => invoke<string | null>("keyvault_setup"),
     setupWithPassphrase: (passphrase) => invoke<string | null>("keyvault_setup_passphrase", { passphrase }),
     unlock: () => invoke<void>("keyvault_unlock"),
@@ -255,6 +287,8 @@ export function createFallbackKeyvaultBridge(): KeyvaultBridge {
       message: "The Keyvault needs the Cua Spaces app and the Cua daemon.",
       serverVerified: false,
       items: [],
+      namesVisible: false,
+      itemsTotal: 0,
       pending: [],
       grants: [],
       rules: [],
@@ -262,6 +296,15 @@ export function createFallbackKeyvaultBridge(): KeyvaultBridge {
       audit: [],
       partialErrors: [],
     }),
+    browse: unavailable,
+    endBrowse: unavailable,
+    inventory: unavailable,
+    favicons: unavailable,
+    lock: unavailable,
+    setLocked: unavailable,
+    deleteItems: unavailable,
+    setAutoWipe: unavailable,
+    setSkipUnlockPrompt: unavailable,
     setup: unavailable,
     setupWithPassphrase: unavailable,
     unlock: unavailable,
