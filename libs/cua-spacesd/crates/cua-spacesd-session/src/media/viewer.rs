@@ -934,10 +934,20 @@ impl Viewer {
         let session_id = self.session_id();
         let shared = self.shared.clone();
         let dispatched = self.input_events_dispatched.clone();
+        let session = self.session.clone();
         self.input_jobs.get_or_insert_with(|| {
             let (jobs, mut queue) = tokio::sync::mpsc::unbounded_channel::<InputJob>();
             tokio::spawn(async move {
+                let mut last_input = None;
                 while let Some(job) = queue.recv().await {
+                    last_input = Some(job.lease.clone());
+                    // Once the socket owner drops, do not dispatch queued
+                    // downs into an unwatched target. The current native job
+                    // has already finished before this check; its held edges
+                    // are released below, after all dispatch work has stopped.
+                    if queue.is_closed() {
+                        break;
+                    }
                     let ack = run_input_job(
                         &session_id,
                         job.lease,
@@ -949,6 +959,11 @@ impl Viewer {
                     .await;
                     shared.push_control(ack);
                     let _ = job.done.send(());
+                }
+                if let Some(input) = last_input {
+                    // Other attached viewers can still own this shared native
+                    // lease. Only the last viewer's worker releases its state.
+                    session.release_input_if_idle(input.as_ref());
                 }
             });
             jobs
