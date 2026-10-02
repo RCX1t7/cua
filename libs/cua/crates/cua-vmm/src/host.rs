@@ -171,8 +171,64 @@ pub fn qemu_accel(guest: Arch) -> &'static str {
         // HVF only virtualises the host's own architecture.
         HostOs::Macos if host == guest => "hvf",
         HostOs::Linux if host == guest && kvm_usable() => "kvm",
-        HostOs::Windows if host == guest => "whpx",
+        HostOs::Windows if host == guest && whpx_usable() => "whpx",
         _ => "tcg",
+    }
+}
+
+/// Whether Windows Hypervisor Platform reports a running hypervisor.
+/// Loading the system DLL dynamically also supports hosts without WHP installed.
+pub fn whpx_usable() -> bool {
+    #[cfg(windows)]
+    {
+        use std::ffi::c_void;
+
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn LoadLibraryExW(name: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
+            fn GetProcAddress(
+                module: *mut c_void,
+                name: *const u8,
+            ) -> Option<unsafe extern "system" fn() -> isize>;
+            fn FreeLibrary(module: *mut c_void) -> i32;
+        }
+        struct Library(*mut c_void);
+        impl Drop for Library {
+            fn drop(&mut self) {
+                unsafe { FreeLibrary(self.0) };
+            }
+        }
+        type GetCapability = unsafe extern "system" fn(u32, *mut c_void, u32, *mut u32) -> i32;
+
+        // LOAD_LIBRARY_SEARCH_SYSTEM32 prevents task/PATH DLL substitution.
+        let name: Vec<u16> = "WinHvPlatform.dll\0".encode_utf16().collect();
+        let module = unsafe { LoadLibraryExW(name.as_ptr(), std::ptr::null_mut(), 0x0000_0800) };
+        if module.is_null() {
+            return false;
+        }
+        let module = Library(module);
+        let Some(function) =
+            (unsafe { GetProcAddress(module.0, c"WHvGetCapability".as_ptr().cast()) })
+        else {
+            return false;
+        };
+        // Signature and capability code are defined by the Windows SDK's WinHvPlatform.h.
+        let get_capability: GetCapability = unsafe { std::mem::transmute(function) };
+        let mut present: i32 = 0; // WHV_CAPABILITY.HypervisorPresent is a Windows BOOL.
+        let mut written: u32 = 0;
+        let result = unsafe {
+            get_capability(
+                0, // WHvCapabilityCodeHypervisorPresent
+                (&mut present as *mut i32).cast(),
+                std::mem::size_of_val(&present) as u32,
+                &mut written,
+            )
+        };
+        result >= 0 && written >= std::mem::size_of_val(&present) as u32 && present != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
     }
 }
 
