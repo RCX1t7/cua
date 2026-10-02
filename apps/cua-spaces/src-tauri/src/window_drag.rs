@@ -220,8 +220,7 @@ pub fn drag_trigger_displays(
 ) -> Vec<cua_spaces_app_core::notch::drag_trigger::DragDisplay> {
     #[cfg(target_os = "windows")]
     {
-        use crate::geometry::{logical_monitor, mode_size, top_center, DisplayStyle, WindowMode};
-        use cua_spaces_app_core::notch::drag_trigger::DragDisplay;
+        use crate::geometry::logical_monitor;
         // The Windows portal is the existing plain top-edge tab. Use Tauri's
         // actual monitor scales and the same geometry as the portal window,
         // rather than manufacture a macOS safe area or notch.
@@ -236,18 +235,7 @@ pub fn drag_trigger_displays(
                     monitor.size().height,
                     monitor.scale_factor(),
                 );
-                DragDisplay {
-                    frame,
-                    notch: top_center(frame, mode_size(WindowMode::Ambient, DisplayStyle::NoNotch)),
-                    prompt: top_center(
-                        frame,
-                        mode_size(WindowMode::AmbientTeleport, DisplayStyle::NoNotch),
-                    ),
-                    expanded: top_center(
-                        frame,
-                        mode_size(WindowMode::Switcher, DisplayStyle::NoNotch),
-                    ),
-                }
+                windows_drag_display(frame)
             })
             .collect()
     }
@@ -255,6 +243,27 @@ pub fn drag_trigger_displays(
     {
         let _ = app;
         cua_spaces_app_core::notch::drag_trigger::portal_displays(&imp::screen_facts())
+    }
+}
+
+/// The Windows top-edge portal geometry, used with Tauri's real monitor
+/// facts and by the opt-in native desktop smoke example.
+#[cfg(target_os = "windows")]
+pub fn windows_drag_display(
+    frame: crate::geometry::LogicalRect,
+) -> cua_spaces_app_core::notch::drag_trigger::DragDisplay {
+    use crate::geometry::{mode_size, top_center, DisplayStyle, WindowMode};
+    cua_spaces_app_core::notch::drag_trigger::DragDisplay {
+        frame,
+        notch: top_center(frame, mode_size(WindowMode::Ambient, DisplayStyle::NoNotch)),
+        prompt: top_center(
+            frame,
+            mode_size(WindowMode::AmbientTeleport, DisplayStyle::NoNotch),
+        ),
+        expanded: top_center(
+            frame,
+            mode_size(WindowMode::Switcher, DisplayStyle::NoNotch),
+        ),
     }
 }
 

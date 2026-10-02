@@ -9,16 +9,15 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{
-    Arc, Mutex, OnceLock,
-    atomic::{AtomicBool, Ordering},
-    mpsc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    mpsc, Arc, Mutex, OnceLock,
 };
 use std::time::Duration;
 
-use super::UxError;
 use super::window::{
     MouseEvent, Rect, WindowDragEvent, WindowDragTracker, WindowInfo, WindowSource,
 };
+use super::UxError;
 
 type Handle = isize;
 #[repr(C)]
@@ -64,6 +63,7 @@ type EventProc = unsafe extern "system" fn(Handle, u32, Handle, i32, i32, u32, u
 
 #[link(name = "user32")]
 unsafe extern "system" {
+    fn SetThreadDpiAwarenessContext(context: Handle) -> Handle;
     fn EnumWindows(callback: unsafe extern "system" fn(Handle, isize) -> i32, data: isize) -> i32;
     fn IsWindow(hwnd: Handle) -> i32;
     fn IsWindowVisible(hwnd: Handle) -> i32;
@@ -90,15 +90,7 @@ unsafe extern "system" {
     fn DispatchMessageW(msg: *const Message) -> isize;
     fn GetDC(hwnd: Handle) -> Handle;
     fn ReleaseDC(hwnd: Handle, dc: Handle) -> i32;
-    fn SendMessageTimeoutW(
-        hwnd: Handle,
-        msg: u32,
-        wp: usize,
-        lp: isize,
-        flags: u32,
-        timeout: u32,
-        result: *mut usize,
-    ) -> isize;
+    fn PrintWindow(hwnd: Handle, dc: Handle, flags: u32) -> i32;
 }
 #[link(name = "kernel32")]
 unsafe extern "system" {
@@ -133,6 +125,24 @@ unsafe extern "system" {
     fn SelectObject(dc: Handle, object: Handle) -> Handle;
     fn DeleteObject(object: Handle) -> i32;
     fn DeleteDC(dc: Handle) -> i32;
+}
+
+// Read physical coordinates consistently even in a DPI-unaware CLI client.
+// This changes only this adapter thread, and restores its prior context.
+struct DpiContext(Handle);
+impl DpiContext {
+    fn enter() -> Self {
+        Self(unsafe { SetThreadDpiAwarenessContext(-4) })
+    }
+}
+impl Drop for DpiContext {
+    fn drop(&mut self) {
+        if self.0 != 0 {
+            unsafe {
+                SetThreadDpiAwarenessContext(self.0);
+            }
+        }
+    }
 }
 
 // Public IDs are opaque u32s, not truncated 64-bit HWNDs. Remember the owner
@@ -254,6 +264,7 @@ fn info(hwnd: Handle) -> Option<WindowInfo> {
     }
 }
 pub fn all_windows() -> Vec<WindowInfo> {
+    let _dpi = DpiContext::enter();
     unsafe extern "system" fn collect(hwnd: Handle, data: isize) -> i32 {
         if let Some(window) = info(hwnd) {
             unsafe {
@@ -275,8 +286,47 @@ pub fn all_windows() -> Vec<WindowInfo> {
     windows
 }
 
+// PrintWindow is synchronous and can block inside the selected app. Each
+// worker owns its GDI resources until the OS call returns; a timeout never
+// frees an in-use bitmap/DC or kills a thread. Bound outstanding workers so
+// unsupported/hung windows cannot accumulate unlimited captures.
+static CAPTURES: AtomicUsize = AtomicUsize::new(0);
+struct CapturePermit;
+impl Drop for CapturePermit {
+    fn drop(&mut self) {
+        CAPTURES.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 pub fn capture(id: u32, max_width: usize) -> Option<Vec<u8>> {
     let hwnd = resolve(id)?;
+    let owner = pid(hwnd);
+    info(hwnd)?;
+    if unsafe { IsHungAppWindow(hwnd) } != 0 {
+        return None;
+    }
+    CAPTURES
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+            (active < 2).then_some(active + 1)
+        })
+        .ok()?;
+    let permit = CapturePermit;
+    let (tx, rx) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("cua-window-preview".into())
+        .spawn(move || {
+            let _permit = permit;
+            let png = if pid(hwnd) == owner {
+                capture_window(hwnd, max_width)
+            } else {
+                None
+            };
+            let _ = tx.send(png);
+        })
+        .ok()?;
+    rx.recv_timeout(Duration::from_secs(1)).ok().flatten()
+}
+fn capture_window(hwnd: Handle, max_width: usize) -> Option<Vec<u8>> {
+    let _dpi = DpiContext::enter();
     info(hwnd)?;
     if unsafe { IsHungAppWindow(hwnd) } != 0 {
         return None;
@@ -323,18 +373,9 @@ pub fn capture(id: u32, max_width: usize) -> Option<Vec<u8>> {
         let result = if bitmap != 0 && !bits.is_null() {
             let old = SelectObject(dc, bitmap);
             std::ptr::write_bytes(bits, 0, length);
-            let mut result = 0;
-            // WM_PRINT, client/nonclient/background only. Timeout a hung app;
-            // no desktop fallback that could expose overlapping windows.
-            let painted = SendMessageTimeoutW(
-                hwnd,
-                0x0317,
-                dc as usize,
-                0x02 | 0x04 | 0x08,
-                0x02 | 0x20,
-                500,
-                &mut result,
-            );
+            // PW_RENDERFULLCONTENT asks DWM/GDI to render this window,
+            // including its client content. Never fall back to desktop pixels.
+            let painted = PrintWindow(hwnd, dc, 2);
             let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, length);
             let png = if painted != 0
                 && pixels
@@ -417,6 +458,7 @@ impl Monitor {
         std::thread::Builder::new()
             .name("cua-window-drag".into())
             .spawn(move || {
+                let _dpi = DpiContext::enter();
                 // OUTOFCONTEXT | SKIPOWNPROCESS: current desktop only, passive.
                 let hook =
                     unsafe { SetWinEventHook(MOVE_START, MOVE_END, 0, event_callback, 0, 0, 2) };
