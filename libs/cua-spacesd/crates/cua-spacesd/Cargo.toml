@@ -8,6 +8,14 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+# Opt-in native E2E uses the official entry point with a separate filename.
+# Existing Windows test instances can remain running during a rebuild.
+[[example]]
+name = "windows_server_e2e"
+path = "src/main.rs"
+test = false
+bench = false
+
 [dependencies]
 cua-driver-core = { path = "../../../cua-driver/rust/crates/cua-driver-core" }
 cua-spacesd-desktop = { path = "../cua-spacesd-desktop" }
