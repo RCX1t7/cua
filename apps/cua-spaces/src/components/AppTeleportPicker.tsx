@@ -3,14 +3,12 @@
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
-import { type CatalogEntry, MOVE_LABEL, type RunReport, type TeleportHost } from "@trycua/cua/teleport";
+import { type CatalogEntry, MOVE_LABEL, type RunReport } from "@trycua/cua/teleport";
 
 import {
   TeleportPickerController,
   appGrid,
-  canConfirm,
   canPlan,
-  formatBytes,
   gridPrimary,
   gridStep,
   progress,
@@ -19,9 +17,10 @@ import {
 } from "../model/teleportFlow";
 import type { OpenWindow } from "../model/teleport";
 
-import { displayPath, displayPaths } from "../model/paths";
+import { displayPath } from "../model/paths";
 import { hasTauri } from "../native/bridge";
-import { hostOs } from "../model/host";
+import type { TeleportReviewHost } from "../model/teleportReview";
+import { TeleportReview } from "./TeleportReview";
 import { useGridLoads } from "./pickerLoads";
 import { PickerTileView } from "./PickerTile";
 import { SearchGlyph } from "./SearchGlyph";
@@ -45,7 +44,7 @@ export function AppTeleportPicker({
   windows,
   captureThumbnail,
 }: {
-  host: TeleportHost;
+  host: TeleportReviewHost;
   /** This machine's open windows, front to back: each app tile previews its
    * frontmost one. */
   windows?: OpenWindow[] | null;
@@ -268,87 +267,8 @@ export function AppTeleportPicker({
     }
     case "planning":
       return <Status title={`Preparing ${s.entry?.name ?? "the teleport"}…`} spinner />;
-    case "consent": {
-      const p = s.plan!;
-      return (
-        <div className="hp-consent ta-consent">
-          <header className="hp-consent-head">
-            <h1 className="hp-consent-title">
-              Teleport {p.app.name} to {spaceName}?
-            </h1>
-          </header>
-          <ul className="hp-items" role="list" aria-label="What moves">
-            {p.consent.map((c) => (
-              <li key={`${c.kind}:${c.key}`} className="hp-item" data-sensitive={c.sensitive} data-kind={c.kind}>
-                <span className="hp-item-label" title={displayPaths(c.detail, home)}>
-                  {displayPaths(c.label, home)}
-                </span>
-                {c.sensitive && <span className="hp-flag">Secret</span>}
-                <span className="hp-item-meta">{c.bytes ? formatBytes(c.bytes) : ""}</span>
-              </li>
-            ))}
-          </ul>
-          {p.warnings.map((w) => (
-            <p key={w} className="hp-note">
-              {w}
-            </p>
-          ))}
-          {p.sensitive && (
-            <label className="ta-choice ta-ack">
-              <input
-                type="checkbox"
-                checked={s.acknowledged}
-                onChange={(ev) => controller.dispatch({ type: "acknowledge", value: ev.target.checked })}
-              />
-              <span>Send the secrets above</span>
-            </label>
-          )}
-          {p.sensitive && (
-            <label className="ta-choice ta-save-to-keyvault" title="Keep this signed-in session sealed in your Cua Keyvault so it can be delivered again without asking again.">
-              <input
-                type="checkbox"
-                checked={s.saveToKeyvault}
-                onChange={(ev) => controller.dispatch({ type: "save-to-keyvault", value: ev.target.checked })}
-              />
-              <span>Save to Keyvault for reuse</span>
-            </label>
-          )}
-          {p.relayUnsealed && (
-            <label className="ta-choice ta-ack">
-              <input
-                type="checkbox"
-                checked={s.acknowledgedRelayPlaintext}
-                onChange={(ev) =>
-                  controller.dispatch({ type: "acknowledge-relay-plaintext", value: ev.target.checked })
-                }
-              />
-              <span>Send without end-to-end encryption</span>
-            </label>
-          )}
-          <footer className="hp-footer">
-            <button type="button" className="hp-cancel" onClick={() => controller.dispatch({ type: "back" })}>
-              Back
-            </button>
-            <span className="hp-footer-note">
-              {p.totalBytes ? `${formatBytes(p.totalBytes)} leaves ${hostOs() === "macos" ? "this Mac" : "this computer"}` : `Nothing leaves ${hostOs() === "macos" ? "this Mac" : "this computer"}`}
-            </span>
-            <div className="hp-footer-right">
-              <button type="button" className="hp-cancel" onClick={onClose}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="hp-button hp-button-primary"
-                disabled={!canConfirm(s)}
-                onClick={() => void controller.confirm()}
-              >
-                Teleport
-              </button>
-            </div>
-          </footer>
-        </div>
-      );
-    }
+    case "consent":
+      return <TeleportReview controller={controller} host={host} home={home} onClose={onClose} autoReview={autoReview} />;
     case "running": {
       const last = s.events[s.events.length - 1];
       const pct = Math.round(progress(s) * 100);
