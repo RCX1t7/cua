@@ -285,10 +285,11 @@ export function InstallerFlow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.driveRequest, drive]);
 
-  // First launch installs the bundled `cua` silently (no page): onto the
-  // plan's target, adding its bin dir to the shell profile when it is not
-  // on PATH. Done shows where it went.
+  // Windows runs the bundled CLI directly; opening the client must not
+  // copy a CLI or edit the account's PATH. Other platforms retain the
+  // upstream first-run CLI installation.
   useEffect(() => {
+    if ((osProp ?? hostOs()) === "windows") return;
     let cancelled = false;
     void installer
       .cliPlan()

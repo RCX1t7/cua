@@ -11,6 +11,27 @@ The standalone browser preview uses fixtures and is not evidence of a working
 remote desktop. Desktop viewing requires `desktop_stream`; an old server shows
 an explicit image-update message.
 
+## Build from source
+
+Use a Visual Studio developer PowerShell with C++ build tools, the Windows SDK,
+WebView2, Node 20+, pnpm 10+, the Rust toolchain pinned by `rust-toolchain.toml`,
+the `wasm32-unknown-unknown` target, wasm-bindgen 0.2.126 and protoc 29.x.
+Keep protoc's `include` directory beside its `bin` directory, or set
+`PROTOC_INCLUDE` explicitly. From `apps/cua-spaces` run:
+
+```powershell
+./scripts/build-windows.ps1
+# Faster development executable (with the real Spaces CLI staged):
+./scripts/build-windows.ps1 -DebugBuild -NoBundle
+```
+
+The script builds `cua-spaces-cli`, stages `cua-<target>.exe`, builds the
+production webview assets and invokes Tauri's existing NSIS/MSI packaging.
+It does not run the installer. The Windows port config turns off updater
+artifact signing and the official release feed, so an unsigned fork build
+does not silently replace itself with an upstream release. All source licenses
+and copyright notices remain in place.
+
 ## Use on Windows
 
 - Open **New Space → Connect by address** to connect an existing server.
@@ -26,6 +47,9 @@ an explicit image-update message.
   agent's normal flow. This action does not import this PC's login session.
 - **Ctrl+N** opens New Space; **Ctrl+,** opens Settings. Closing the main
   window hides it; the notification-area icon reopens it.
+- The app uses the bundled `cua.exe` directly. First launch on Windows does
+  not copy it to another directory or edit the account's PATH. To use the CLI
+  in a terminal, invoke that executable by its full path.
 
 These describe code paths, not a certification that every server, codec,
 agent harness, or operating system has passed Windows end-to-end testing.
