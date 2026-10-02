@@ -39,6 +39,7 @@ import { experimentsPage, settingsWithStorage } from "../model/experiments";
 import { chooseExperimentRow, useExperiments } from "../state/experiments";
 import { MiddleText } from "./MiddleText";
 import { SfIcon } from "./SfIcon";
+import { AboutSettings } from "./AboutSettings";
 
 /** The clipboard (the webview's). */
 const writeClipboard = (text: string): Promise<void> => navigator.clipboard.writeText(text);
@@ -513,6 +514,7 @@ export function SettingsPanel({
           </section>
         );
       })}
+      <AboutSettings onOpenExternal={onOpenExternal} />
     </div>
   );
 }
