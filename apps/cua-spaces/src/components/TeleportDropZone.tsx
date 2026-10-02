@@ -27,6 +27,7 @@ import { handleViewerAppDrop } from "../native/appDrop";
 import { core } from "../core";
 import { isResize } from "../model/dragTrigger";
 import { detailCopy } from "../model/window";
+import { hostOs } from "../model/host";
 import { Sym } from "./desktop/Sym";
 import type { FileSendBridge, SentFile } from "../native/fileSend";
 import { screenToClient, type WindowDragBridge } from "../native/windowDrag";
@@ -80,6 +81,7 @@ export default function TeleportDropZone({
   appDrop,
 }: TeleportDropZoneProps) {
   const copy = detailCopy();
+  const windowsHost = hostOs() === "windows";
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [over, setOver] = useState(false);
   const zoneRef = useRef<HTMLDivElement | null>(null);
@@ -139,9 +141,13 @@ export default function TeleportDropZone({
           if (inside && payload.paths?.length) {
             const paths = payload.paths;
             const route = appDrop ?? ((p: string[]) => handleViewerAppDrop(p, { id: spaceId, name: spaceName }));
-            void route(paths).then((wasApp) => {
-              if (!wasApp) void send(paths);
-            });
+            void route(paths)
+              .then((wasApp) => {
+                if (!wasApp) void send(paths);
+              })
+              .catch((error: unknown) =>
+                setStatus({ kind: "failed", message: error instanceof Error ? error.message : String(error) }),
+              );
           }
         });
         if (cancelled) unlisten();
@@ -215,7 +221,12 @@ export default function TeleportDropZone({
         data-busy={busy ? "true" : undefined}
       >
         <Sym name={over ? copy.teleportSymbolActive : copy.teleportSymbol} size={22} className="sl-dropzone-icon" />
-        <p className="sl-dropzone-caption">{copy.dropCaption}</p>
+        <p className="sl-dropzone-caption">{windowsHost ? "Drop files here to send them to this Space" : copy.dropCaption}</p>
+        {windowsHost && (
+          <p className="sl-dropzone-status" role="note">
+            Dragging another app's window into a Space is not available on Windows. App sign-in transfer depends on its provider; sign in inside the Space when unavailable.
+          </p>
+        )}
         <div className="sl-dropzone-actions">
           <button type="button" className="sl-dropzone-button" onClick={selectFile} disabled={busy}>
             {copy.sendFile}

@@ -121,7 +121,12 @@ export function InstallerFlow({
   // Settings, Experiments decide the pages (Cua Volume's only with it on).
   const [state, setState] = useState<OnboardingState>(() =>
     reduceOnboarding(
-      { ...initialOnboarding(installerMode ?? null, initialIdentity ?? null), step: initialStep },
+      {
+        ...initialOnboarding(installerMode ?? null, initialIdentity ?? null),
+        step: initialStep,
+        // Windows startup registration is an explicit opt-in on Done.
+        ...((osProp ?? hostOs()) === "windows" ? { launchAtLogin: false } : {}),
+      },
       { type: "experiments-loaded", experiments: currentExperiments() },
     ),
   );
@@ -175,7 +180,7 @@ export function InstallerFlow({
   const finish = () => {
     telemetry.recordSignals(onboardingFinishedSignals(state));
     if (loginItem.isNative) {
-      const on = state.launchAtLogin ?? true;
+      const on = state.launchAtLogin ?? (os !== "windows");
       writeLaunchChoice(on);
       void loginItem.set(on).catch(() => {});
     }
