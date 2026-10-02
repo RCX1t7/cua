@@ -33,6 +33,8 @@ pub struct Loc {
     /// On Windows, the default is this path under `%LOCALAPPDATA%` (else
     /// `~/AppData/Local`) instead (Hermes keeps its home there).
     pub windows_local: Option<&'static str>,
+    /// On Windows, a path under `%APPDATA%` (else `~/AppData/Roaming`).
+    pub windows_roaming: Option<&'static str>,
 }
 
 impl Loc {
@@ -42,6 +44,7 @@ impl Loc {
             base: Base::Home,
             rel,
             windows_local: None,
+            windows_roaming: None,
         }
     }
     const fn config(rel: &'static str) -> Self {
@@ -50,6 +53,7 @@ impl Loc {
             base: Base::Config,
             rel,
             windows_local: None,
+            windows_roaming: None,
         }
     }
     const fn app_data(rel: &'static str) -> Self {
@@ -58,6 +62,7 @@ impl Loc {
             base: Base::AppData,
             rel,
             windows_local: None,
+            windows_roaming: None,
         }
     }
     const fn env(self, var: &'static str, under: &'static str) -> Self {
@@ -70,6 +75,13 @@ impl Loc {
     const fn windows_local(self, rel: &'static str) -> Self {
         Loc {
             windows_local: Some(rel),
+            ..self
+        }
+    }
+
+    const fn windows_roaming(self, rel: &'static str) -> Self {
+        Loc {
+            windows_roaming: Some(rel),
             ..self
         }
     }
@@ -87,6 +99,13 @@ impl Loc {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| env.home.join("AppData/Local"));
             return join(local, rel);
+        }
+        if let (Some(rel), crate::Os::Windows) = (self.windows_roaming, env.os) {
+            let roaming = env
+                .var("APPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| env.home.join("AppData/Roaming"));
+            return join(roaming, rel);
         }
         let root = match self.base {
             Base::Home => env.home.clone(),
@@ -534,19 +553,21 @@ pub static AGENTS: &[AgentSpec] = &[
         name: "Goose",
         aliases: &[],
         bins: &["goose"],
-        markers: &[Loc::config("goose")],
+        // https://goose-docs.ai/docs/guides/config-files/
+        markers: &[Loc::config("goose").windows_roaming("Block/goose/config")],
         apps: &["Goose.app"],
         skills: Some(AGENTS_SKILLS),
         also_reads: &[],
         mcp: Some(McpSpec {
-            file: Loc::config("goose/config.yaml"),
+            file: Loc::config("goose/config.yaml")
+                .windows_roaming("Block/goose/config/config.yaml"),
             alt_files: &[],
             format: Format::Yaml,
             key_path: &["extensions"],
             shape: Shape::Goose,
             owner_cli: None,
         }),
-        unverified: "the Windows path (%APPDATA%\\Block\\goose\\config) is not used; whether `description` is required",
+        unverified: "GOOSE_PATH_ROOT overrides are not used",
     },
     AgentSpec {
         id: "zed",

@@ -99,7 +99,11 @@ fn fixture(agent: &str) -> (&'static str, String) {
             "{\n  // amp\n  \"amp.notifications.enabled\": true,\n  \"amp.mcpServers\": {\n    \"other\": {\"command\": \"other-mcp\"}\n  }\n}\n".into(),
         ),
         "goose" => (
-            ".config/goose/config.yaml",
+            if cfg!(windows) {
+                "AppData/Roaming/Block/goose/config/config.yaml"
+            } else {
+                ".config/goose/config.yaml"
+            },
             "# goose config\nGOOSE_PROVIDER: anthropic\nextensions:\n  other:\n    type: stdio\n    name: other\n    cmd: other-mcp\n    args: []\n    enabled: true\n".into(),
         ),
         "hermes" => (hermes_rel("config.yaml"), HERMES_CONFIG.into()),
@@ -299,7 +303,11 @@ fn malformed_configs_fail_clearly_and_are_not_touched() {
     // A commented YAML file whose servers are a flow mapping: the splice
     // does not handle it, and a serde round trip would drop the comment.
     let commented_yaml = t.write(
-        ".config/goose/config.yaml",
+        if cfg!(windows) {
+            "AppData/Roaming/Block/goose/config/config.yaml"
+        } else {
+            ".config/goose/config.yaml"
+        },
         "# mine\nextensions: {other: {cmd: x}}\n",
     );
     let s = t.setup();
