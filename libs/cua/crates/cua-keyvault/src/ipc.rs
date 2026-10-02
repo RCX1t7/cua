@@ -3,8 +3,12 @@
 
 //! The Keyvault socket: framing, server and client.
 //!
-//! - One Unix socket, `$CUA_HOME/keyvault.sock`, mode 0600, bound inside a
-//!   private 0700 directory and renamed into place (no chmod race). Never
+//! - Unix: `$CUA_HOME/keyvault.sock`, mode 0600, bound inside a private 0700
+//!   directory and renamed into place (no chmod race). Windows: a local-only
+//!   named pipe bound to the account/session/home, with a current-user DACL.
+//!   Windows running-code authority is not established yet, so production
+//!   clients refuse it even when its executable FILE has a valid signature.
+//!   Never
 //!   TCP, HTTP, gRPC-Web, WebSocket or MCP: nothing a browser can reach.
 //! - Frames: a 4-byte big-endian length, then JSON. At most 1 MiB. One
 //!   response per request.
@@ -15,7 +19,7 @@
 //!   the path first and phish consent).
 
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,7 +29,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use zeroize::Zeroize;
 
 use crate::audit::{AuditEntry, Verification};
-#[cfg(unix)]
+#[cfg(any(unix, target_os = "windows"))]
 use crate::broker::StageSink;
 use crate::broker::{
     AccessRequest, ApproveOptions, Broker, Decision, ImportReport, ImportSpec, InitRequest,
@@ -342,12 +346,10 @@ pub async fn dispatch(broker: &Broker, caller: &CallerIdentity, req: Request) ->
     }
     match req {
         Request::Status => Response::ok(broker.status(caller).await),
-        Request::Init(r) => reply!(
-            broker
-                .init(caller, r)
-                .await
-                .map(|k| serde_json::json!({ "recovery_key": k }))
-        ),
+        Request::Init(r) => reply!(broker
+            .init(caller, r)
+            .await
+            .map(|k| serde_json::json!({ "recovery_key": k }))),
         Request::Unlock(r) => reply!(broker.unlock(caller, r).await),
         Request::Lock => reply!(broker.lock(caller).await),
         Request::SetDisabled { disabled } => reply!(broker.set_disabled(caller, disabled).await),
@@ -366,12 +368,10 @@ pub async fn dispatch(broker: &Broker, caller: &CallerIdentity, req: Request) ->
                 .await
         ),
         Request::ListFavicons => reply!(broker.list_favicons(caller).await),
-        Request::Browse => reply!(
-            broker
-                .browse(caller)
-                .await
-                .map(|until| serde_json::json!({ "browse_until_ms": until }))
-        ),
+        Request::Browse => reply!(broker
+            .browse(caller)
+            .await
+            .map(|until| serde_json::json!({ "browse_until_ms": until }))),
         Request::EndBrowse => reply!(broker.end_browse(caller).await),
         Request::Inventory { app, profile } => {
             reply!(broker.inventory(caller, &app, profile.as_deref()).await)
@@ -428,12 +428,10 @@ pub async fn dispatch(broker: &Broker, caller: &CallerIdentity, req: Request) ->
         Request::Release { target } => reply!(broker.release(caller, &target).await),
         Request::ListDeliveries => reply!(broker.list_deliveries(caller).await),
         Request::Audit { limit } => reply!(broker.audit_tail(caller, limit.unwrap_or(200)).await),
-        Request::VerifyAudit => reply!(
-            broker
-                .verify_audit(caller)
-                .await
-                .map(VerificationView::from)
-        ),
+        Request::VerifyAudit => reply!(broker
+            .verify_audit(caller)
+            .await
+            .map(VerificationView::from)),
     }
 }
 
@@ -543,11 +541,26 @@ async fn handle(mut stream: tokio::net::UnixStream, broker: Arc<Broker>, policy:
         }
     };
     broker.remember_caller(&caller).await;
+    handle_identified(stream, broker, caller).await;
+}
+
+#[cfg(any(unix, target_os = "windows"))]
+async fn handle_identified<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    mut stream: S,
+    broker: Arc<Broker>,
+    caller: CallerIdentity,
+    #[cfg(target_os = "windows")] peer: &crate::caller::windows::Peer,
+) {
     for _ in 0..MAX_REQUESTS_PER_CONNECTION {
         let mut frame = match tokio::time::timeout(IDLE_TIMEOUT, read_frame(&mut stream)).await {
             Ok(Ok(Some(f))) => f,
             _ => return,
         };
+        #[cfg(target_os = "windows")]
+        if peer.ensure_alive().is_err() {
+            frame.zeroize();
+            return;
+        }
         let parsed = serde_json::from_slice::<Request>(&frame);
         // An `init` or `unlock` frame carries a passphrase: wipe the raw
         // bytes as soon as they are parsed.
@@ -586,9 +599,9 @@ async fn handle(mut stream: tokio::net::UnixStream, broker: Arc<Broker>, policy:
 /// `import_and_teleport` with its stages written as frames while it runs;
 /// the reply is returned for the caller to write. None when the client went
 /// away (the teleport still finishes).
-#[cfg(unix)]
-async fn teleport_streaming(
-    stream: &mut tokio::net::UnixStream,
+#[cfg(any(unix, target_os = "windows"))]
+async fn teleport_streaming<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    stream: &mut S,
     broker: &Broker,
     caller: &CallerIdentity,
     spec: ImportSpec,
@@ -638,6 +651,72 @@ async fn teleport_streaming(
 // Client
 // ---------------------------------------------------------------------------
 
+/// Windows local-only listener. Its first instance reserves the endpoint;
+/// subsequent instances retain the same current-user DACL.
+#[cfg(target_os = "windows")]
+pub struct WindowsListener {
+    name: String,
+    waiting: tokio::net::windows::named_pipe::NamedPipeServer,
+}
+
+#[cfg(target_os = "windows")]
+pub async fn bind(path: &Path) -> Result<WindowsListener> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::Invalid("Keyvault endpoint has no parent".into()))?;
+    crate::store::private_dir(parent)?;
+    let name = crate::caller::windows::pipe_name(path).map_err(|e| Error::Os(e.to_string()))?;
+    let waiting = crate::caller::windows::create_pipe(&name, true)?;
+    Ok(WindowsListener { name, waiting })
+}
+
+#[cfg(target_os = "windows")]
+pub async fn serve(mut listener: WindowsListener, broker: Arc<Broker>, policy: TrustPolicy) {
+    use std::os::windows::io::AsRawHandle;
+    let policy = Arc::new(policy);
+    loop {
+        if let Err(error) = listener.waiting.connect().await {
+            tracing::warn!(%error, "keyvault Windows pipe accept failed");
+            return;
+        }
+        // Always reserve the next instance before handing this one off. This
+        // keeps ownership of the pipe name continuously across connections.
+        let next = match crate::caller::windows::create_pipe(&listener.name, false) {
+            Ok(next) => next,
+            Err(error) => {
+                tracing::warn!(%error, "keyvault Windows pipe reservation failed");
+                return;
+            }
+        };
+        let mut stream = std::mem::replace(&mut listener.waiting, next);
+        let broker = broker.clone();
+        let policy = policy.clone();
+        tokio::spawn(async move {
+            let peer = match crate::caller::windows::identify_pipe(
+                stream.as_raw_handle(),
+                true,
+                &policy,
+            ) {
+                Ok(peer) => peer,
+                Err(error) => {
+                    broker.record_rejected(&error.to_string()).await;
+                    let response =
+                        Response::err(&Error::Forbidden(format!("caller not identified: {error}")));
+                    if let Ok(bytes) = serde_json::to_vec(&response) {
+                        let _ = write_frame(&mut stream, &bytes).await;
+                    }
+                    return;
+                }
+            };
+            if policy.is_test_policy {
+                tracing::warn!("keyvault: isolated Windows TEST identity is unverified; never use the OS key store");
+            }
+            broker.remember_caller(&peer.identity).await;
+            handle_identified(stream, broker, peer.identity.clone(), &peer).await;
+        });
+    }
+}
+
 /// How a client checks the server.
 #[derive(Clone, Debug)]
 pub enum ServerCheck {
@@ -652,6 +731,13 @@ impl ServerCheck {
     /// Production in release builds. Debug builds may opt out with
     /// `CUA_KEYVAULT_ALLOW_UNVERIFIED_DAEMON=1` (unsigned dev daemons).
     pub fn default_for_build() -> Self {
+        // A debug environment switch cannot turn a Windows pipe impersonator
+        // into a trusted server. Fixtures must supply their exact hash policy.
+        #[cfg(target_os = "windows")]
+        {
+            return ServerCheck::Require(TrustPolicy::production());
+        }
+        #[cfg(not(target_os = "windows"))]
         if cfg!(debug_assertions)
             && std::env::var("CUA_KEYVAULT_ALLOW_UNVERIFIED_DAEMON").as_deref() == Ok("1")
         {
@@ -662,19 +748,20 @@ impl ServerCheck {
     }
 }
 
-/// The client's connection: the Keyvault socket. Peer verification
-/// ([`crate::caller::identify_peer`]) exists only for Unix sockets, so other
-/// OSes have no connection type and [`KeyvaultClient::connect`] refuses.
+/// The client's connection: Unix socket or Windows local named pipe. Other
+/// platforms have no connection type and [`KeyvaultClient::connect`] refuses.
 #[cfg(unix)]
 type ClientStream = tokio::net::UnixStream;
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+type ClientStream = tokio::net::windows::named_pipe::NamedPipeClient;
+#[cfg(not(any(unix, target_os = "windows")))]
 type ClientStream = NoConnection;
 
 /// Uninhabited: no Keyvault connection exists on this OS.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, target_os = "windows")))]
 pub enum NoConnection {}
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, target_os = "windows")))]
 impl tokio::io::AsyncRead for NoConnection {
     fn poll_read(
         self: std::pin::Pin<&mut Self>,
@@ -685,7 +772,7 @@ impl tokio::io::AsyncRead for NoConnection {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, target_os = "windows")))]
 impl tokio::io::AsyncWrite for NoConnection {
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
@@ -711,6 +798,8 @@ impl tokio::io::AsyncWrite for NoConnection {
 /// A Keyvault client.
 pub struct KeyvaultClient {
     stream: ClientStream,
+    #[cfg(target_os = "windows")]
+    peer: crate::caller::windows::Peer,
     /// The server as verified at connect.
     pub server: Option<CallerIdentity>,
 }
@@ -735,6 +824,49 @@ pub enum ConnectError {
 }
 
 impl KeyvaultClient {
+    /// Windows clients verify the kernel server PID/account and retain its
+    /// process/image handles. Production rejects unproved running-code identity;
+    /// an isolated debug fixture can supply an explicit exact-byte test policy.
+    #[cfg(target_os = "windows")]
+    pub async fn connect(
+        path: &Path,
+        check: ServerCheck,
+    ) -> std::result::Result<Self, ConnectError> {
+        use std::os::windows::io::AsRawHandle;
+        use tokio::net::windows::named_pipe::ClientOptions;
+        let policy = match check {
+            ServerCheck::Require(policy) => policy,
+            ServerCheck::Unverified => return Err(ConnectError::Other(
+                "Windows Keyvault requires an explicit authenticated server policy; unverified transport is refused".into()
+            )),
+        };
+        let name = crate::caller::windows::pipe_name(path)
+            .map_err(|_| ConnectError::NotRunning(path.to_path_buf()))?;
+        let stream = ClientOptions::new().open(&name).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                ConnectError::NotRunning(path.to_path_buf())
+            } else {
+                ConnectError::Other(error.to_string())
+            }
+        })?;
+        let peer = crate::caller::windows::identify_pipe(stream.as_raw_handle(), false, &policy)
+            .map_err(|e| ConnectError::Other(e.to_string()))?;
+        if !peer.identity.first_party {
+            return Err(ConnectError::Impostor {
+                path: path.to_path_buf(),
+                who: format!(
+                    "{}; Windows running-code authority is not established by a file signature",
+                    peer.identity.display()
+                ),
+            });
+        }
+        let server = Some(peer.identity.clone());
+        Ok(Self {
+            stream,
+            server,
+            peer,
+        })
+    }
     /// Connects to `path` and verifies the server per `check`.
     #[cfg(unix)]
     pub async fn connect(
@@ -783,7 +915,7 @@ impl KeyvaultClient {
 
     /// Connects to `path`: the Keyvault IPC needs a kernel-verified Unix
     /// socket peer, so it is not available on this OS yet.
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, target_os = "windows")))]
     pub async fn connect(
         path: &Path,
         check: ServerCheck,
@@ -812,6 +944,10 @@ impl KeyvaultClient {
         req: &Request,
         on: &mut (dyn FnMut(TeleportStage) + Send),
     ) -> Result<Value> {
+        #[cfg(target_os = "windows")]
+        self.peer
+            .ensure_alive()
+            .map_err(|e| Error::Forbidden(e.to_string()))?;
         let mut bytes = serde_json::to_vec(req)?;
         let written = write_frame(&mut self.stream, &bytes).await;
         // `init` and `unlock` frames carry a passphrase.
@@ -1232,12 +1368,10 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(wire["stage"]["stage"], "uploading");
-        assert!(
-            serde_json::to_value(Response::ok(1))
-                .unwrap()
-                .get("stage")
-                .is_none()
-        );
+        assert!(serde_json::to_value(Response::ok(1))
+            .unwrap()
+            .get("stage")
+            .is_none());
         // An older client's request (no flag) asks for no stages.
         let old: Request = serde_json::from_str(
             r#"{"op":"import_and_teleport","spec":{"app":"chrome"},"target":"t"}"#,

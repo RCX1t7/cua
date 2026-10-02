@@ -903,7 +903,7 @@ pub async fn serve_socket(broker: Arc<Broker>, path: std::path::PathBuf) {
     }
     // A daemon this one replaced may still hold the socket for a moment
     // while it exits (a stale file is replaced at once): retry, bounded.
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     {
         let mut tries = 0;
         let listener = loop {
@@ -924,10 +924,9 @@ pub async fn serve_socket(broker: Arc<Broker>, path: std::path::PathBuf) {
             cua_keyvault::ipc::serve(listener, broker, policy).await;
         }
     }
-    // The socket verifies every peer through the kernel (a Unix socket
-    // feature); on other OSes only the in-process broker (the app and the
-    // daemon's MCP tools) reaches the vault.
-    #[cfg(not(unix))]
+    // Unix sockets and Windows named pipes obtain peer identity from the
+    // kernel. Other platforms expose only the in-process broker.
+    #[cfg(not(any(unix, target_os = "windows")))]
     {
         let _ = (broker, policy);
         tracing::info!(path = %path.display(), "keyvault: no external socket on this OS");

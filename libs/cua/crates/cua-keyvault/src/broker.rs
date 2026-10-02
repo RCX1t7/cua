@@ -1136,6 +1136,10 @@ impl Broker {
         if cfg!(not(any(target_os = "macos", target_os = "windows"))) {
             return Some("this platform has no OS key store protector yet".into());
         }
+        #[cfg(target_os = "windows")]
+        if let Err(error) = crate::caller::windows::require_production_authority() {
+            return Some(error.to_string());
+        }
         None
     }
 

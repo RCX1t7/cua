@@ -198,6 +198,10 @@ pub struct SigningBadge {
 /// The badge for a caller.
 pub fn signing_badge(c: &KvCaller) -> SigningBadge {
     match &c.signing {
+        KvSigning::WindowsSigned { publisher, .. } => SigningBadge {
+            text: format!("{publisher}: signed file, running image unverified"),
+            tone: Tone::Warn,
+        },
         KvSigning::Signed { team_id, .. } if c.os_verified => SigningBadge {
             text: format!("signed, team {team_id}"),
             tone: Tone::Ok,

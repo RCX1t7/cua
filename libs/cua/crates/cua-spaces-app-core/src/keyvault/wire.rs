@@ -128,6 +128,15 @@ pub struct KvInventory {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum KvSigning {
+    /// Verified Authenticode image file evidence, not live process authority.
+    WindowsSigned {
+        /// Signing leaf certificate SHA-256.
+        certificate_sha256: String,
+        /// Certificate publisher display name.
+        publisher: String,
+        /// Image file SHA-256.
+        executable_sha256: String,
+    },
     /// Team-signed.
     Signed {
         /// Team.

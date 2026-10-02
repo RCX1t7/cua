@@ -372,6 +372,7 @@ mod windows {
         }
 
         fn enroll(&self, vault_id: &str, vmk: &SecretKey) -> Result<ProtectorRecord> {
+            crate::caller::windows::require_production_authority()?;
             let kek = SecretKey::generate()?;
             let entry = keyring::Entry::new(OS_SECRET_SERVICE, vault_id)
                 .map_err(|e| Error::Os(e.to_string()))?;
@@ -391,6 +392,7 @@ mod windows {
         }
 
         fn unwrap(&self, vault_id: &str, record: &ProtectorRecord) -> Result<SecretKey> {
+            crate::caller::windows::require_production_authority()?;
             let entry = keyring::Entry::new(OS_SECRET_SERVICE, vault_id)
                 .map_err(|e| Error::Os(e.to_string()))?;
             let raw = Zeroizing::new(entry.get_secret().map_err(|e| Error::Os(e.to_string()))?);
@@ -398,6 +400,7 @@ mod windows {
         }
 
         fn remove(&self, record: &ProtectorRecord) -> Result<()> {
+            crate::caller::windows::require_production_authority()?;
             if let Some(e) = record
                 .account
                 .as_ref()
@@ -464,14 +467,12 @@ mod tests {
     fn os_protector_refuses_unsigned_enrolment() {
         use crate::caller::Signing;
         // Red-team F2: only a team-signed identity may create the KEK protector.
-        assert!(
-            require_signed_os_protector(&Signing::Signed {
-                team_id: "YCK386LBJ7".into(),
-                identifier: "com.trycua.cua".into(),
-                cdhash: "00".into(),
-            })
-            .is_ok()
-        );
+        assert!(require_signed_os_protector(&Signing::Signed {
+            team_id: "YCK386LBJ7".into(),
+            identifier: "com.trycua.cua".into(),
+            cdhash: "00".into(),
+        })
+        .is_ok());
         for s in [
             Signing::Unsigned,
             Signing::Unknown,

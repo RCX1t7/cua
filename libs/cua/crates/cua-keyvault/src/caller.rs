@@ -27,6 +27,16 @@ use crate::crypto::sha256;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Signing {
+    /// Authenticode evidence for the image file. This does not attest the
+    /// currently executing image and alone grants no first-party authority.
+    WindowsSigned {
+        /// SHA-256 of the signing leaf certificate.
+        certificate_sha256: String,
+        /// Certificate subject display name, obtained from the verified chain.
+        publisher: String,
+        /// SHA-256 of the locked image file.
+        executable_sha256: String,
+    },
     /// A valid signature from a certificate chain with a team id.
     Signed {
         /// Apple team id (`subject.OU` of the leaf).
@@ -100,6 +110,11 @@ impl CallerIdentity {
     ///   such callers never get unattended rules by default.
     pub fn fingerprint(&self) -> String {
         let raw = match &self.signing {
+            Signing::WindowsSigned {
+                certificate_sha256,
+                executable_sha256,
+                ..
+            } => format!("windows-cert:{certificate_sha256}|image:{executable_sha256}"),
             Signing::Signed {
                 team_id,
                 identifier,
@@ -122,6 +137,9 @@ impl CallerIdentity {
     /// the headline (red-team F4).
     pub fn display(&self) -> String {
         let who = match &self.signing {
+            Signing::WindowsSigned { publisher, .. } => {
+                format!("{publisher} (Authenticode-signed file; running image UNVERIFIED)")
+            }
             Signing::Signed {
                 team_id,
                 identifier,
@@ -147,8 +165,9 @@ impl CallerIdentity {
             ),
         };
         match (&self.launched_by, self.first_party) {
-            (Some(parent), true) => format!("Cua: {who}, launched by {parent}"),
-            (None, true) => format!("Cua: {who}"),
+            (Some(parent), true) if self.os_verified => format!("Cua: {who}, launched by {parent}"),
+            (None, true) if self.os_verified => format!("Cua: {who}"),
+            (_, true) => format!("{who} (configured first-party policy; OS identity UNVERIFIED)"),
             (_, false) => who,
         }
     }
@@ -209,6 +228,12 @@ impl CallerIdentity {
 /// Which code counts as Cua.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrustPolicy {
+    /// Windows signing certificate pins, public SHA-256 values. File evidence
+    /// alone never makes a running process first party (see caller/windows.rs).
+    pub windows_certificate_sha256: Vec<String>,
+    /// Exact executable hashes for isolated debug fixtures only. Ignored in
+    /// release builds and unless this is explicitly a test policy.
+    pub windows_test_executable_sha256: Vec<String>,
     /// macOS code requirement (csreq syntax) a first-party caller satisfies.
     pub macos_requirement: String,
     /// Require the hardened runtime flag on first-party callers (so they
@@ -246,6 +271,10 @@ impl TrustPolicy {
             .collect::<Vec<_>>()
             .join(" or ");
         Self {
+            windows_certificate_sha256: option_env!("CUA_KEYVAULT_WINDOWS_CERT_SHA256")
+                .filter(|pin| pin.len() == 64 && pin.bytes().all(|b| b.is_ascii_hexdigit()))
+                .map(|pin| vec![pin.to_ascii_lowercase()]).unwrap_or_default(),
+            windows_test_executable_sha256: Vec::new(),
             macos_requirement: format!(
                 "anchor apple generic and certificate leaf[subject.OU] = \"{CUA_TEAM_ID}\" and ({ids})"
             ),
@@ -259,13 +288,27 @@ impl TrustPolicy {
     /// throwaway signing identity.
     pub fn for_tests(requirement: impl Into<String>) -> Self {
         Self {
+            windows_certificate_sha256: Vec::new(),
+            windows_test_executable_sha256: Vec::new(),
             macos_requirement: requirement.into(),
             require_hardened_runtime: false,
             linux_first_party_exes: Vec::new(),
             is_test_policy: true,
         }
     }
+
+    /// An explicitly marked, unverified test identity. This authorizes only
+    /// exact image bytes in a debug fixture and must be paired with an isolated
+    /// passphrase vault and injected fixture presence, never the OS key store.
+    pub fn for_windows_tests(executable_sha256: Vec<String>) -> Self {
+        let mut policy = Self::for_tests("Windows isolated fixture");
+        policy.windows_test_executable_sha256 = executable_sha256;
+        policy
+    }
 }
+
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 /// Why a peer could not be identified.
 #[derive(Debug, thiserror::Error)]
@@ -534,10 +577,9 @@ mod tests {
         let p = TrustPolicy::production();
         assert!(p.macos_requirement.starts_with("anchor apple generic"));
         assert!(p.macos_requirement.contains(CUA_TEAM_ID));
-        assert!(
-            p.macos_requirement
-                .contains("identifier \"com.trycua.cua\"")
-        );
+        assert!(p
+            .macos_requirement
+            .contains("identifier \"com.trycua.cua\""));
         assert!(p.require_hardened_runtime && !p.is_test_policy);
     }
 
