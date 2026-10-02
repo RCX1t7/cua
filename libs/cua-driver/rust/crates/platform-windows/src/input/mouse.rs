@@ -668,7 +668,7 @@ fn send_click_synthesized_mods_impl(
             if sent as usize != events.len() {
                 // A partial burst can insert button-down without button-up.
                 // Release at the current pointer without another move/click.
-                if SendInput(&[up_input], std::mem::size_of::<INPUT>() as i32) != 1 {
+                if activate && SendInput(&[up_input], std::mem::size_of::<INPUT>() as i32) != 1 {
                     let _ = SendInput(&[up_input], std::mem::size_of::<INPUT>() as i32);
                 }
                 sent_ok = false;
