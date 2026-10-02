@@ -76,6 +76,8 @@ fn desktop_action_coordinator() -> &'static tokio::sync::Mutex<()> {
     COORDINATOR.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
+const DESKTOP_ACTION_ADMISSION_TIMEOUT: Duration = Duration::from_secs(5);
+
 fn active_text_input_pids() -> &'static Mutex<HashSet<i64>> {
     static ACTIVE: OnceLock<Mutex<HashSet<i64>>> = OnceLock::new();
     ACTIVE.get_or_init(|| Mutex::new(HashSet::new()))
@@ -1707,12 +1709,6 @@ impl ToolRegistry {
         } else {
             None
         };
-        let start_ms = now_ms();
-        let cursor_event = crate::cursor_events::begin_tool(resolved_name, &args);
-        let pending_history = self.history.as_ref().and_then(|history| {
-            history.begin_action(resolved_name, &public_args, runtime_session.as_deref())
-        });
-
         // Reserve and capture the turn before dispatch so recorded evidence
         // shows the application immediately before the action changed it.
         // Exclude session lifecycle calls, including one-shot CLI teardown.
@@ -1737,14 +1733,34 @@ impl ToolRegistry {
             // lane is uncontended. On Windows, that yield creates a window in
             // which the foreground target can lose keyboard eligibility
             // between the fixture's focus proof and SendInput. Contended
-            // runtimes still wait and serialize through the same mutex.
+            // runtimes wait only for admission, never time out the owner of a
+            // running action. Dropping a timed-out lock future removes the
+            // waiter, so a refused call cannot dispatch after the lane clears.
             Some(match coordinator.try_lock() {
                 Ok(guard) => guard,
-                Err(_) => coordinator.lock().await,
+                Err(_) => {
+                    match tokio::time::timeout(DESKTOP_ACTION_ADMISSION_TIMEOUT, coordinator.lock())
+                        .await
+                    {
+                        Ok(guard) => guard,
+                        Err(_) => {
+                            return protected_refusal(
+                                "input_busy",
+                                "desktop input is busy; no action was dispatched",
+                            );
+                        }
+                    }
+                }
             })
         } else {
             None
         };
+        // Only admitted calls start action evidence and cursor animation.
+        let start_ms = now_ms();
+        let cursor_event = crate::cursor_events::begin_tool(resolved_name, &args);
+        let pending_history = self.history.as_ref().and_then(|history| {
+            history.begin_action(resolved_name, &public_args, runtime_session.as_deref())
+        });
         let pending_turn = should_record
             .then(|| {
                 // Use the same trusted identities the recording owner was minted from.
