@@ -7,7 +7,7 @@
 //! only after confirming the exact window. Native acceptance is not a claim
 //! that the application's state changed; embedders still verify that state.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -42,6 +42,7 @@ pub struct InteractiveInputSession {
 struct State {
     // Remember each original recipient so release never follows changed focus.
     keys: BTreeMap<u16, u64>,
+    explicit_modifiers: BTreeSet<u16>,
     buttons: BTreeMap<u8, u64>,
     last_point: (i32, i32),
     scroll_x: f64,
@@ -234,14 +235,29 @@ impl InteractiveInputSession {
                 modifiers,
                 repeat,
             } => {
-                self.admit_background(if modifiers.is_empty() {
-                    delivery::EventKind::Keystroke
-                } else {
-                    delivery::EventKind::KeyCombo
-                })?;
-                self.modifiers(state, modifiers)?;
                 let vk = key_vk(key)?;
+                self.admit_background(
+                    if modifiers.is_empty() && state.explicit_modifiers.is_empty() {
+                        delivery::EventKind::Keystroke
+                    } else {
+                        delivery::EventKind::KeyCombo
+                    },
+                )?;
+                let modifier = [VK_LWIN, VK_SHIFT, VK_MENU, VK_CONTROL].contains(&vk);
+                // Explicit key edges (including the viewer's chord menu)
+                // survive events with an empty modifier snapshot. Snapshot
+                // modifiers are reconciled independently for pointer/chords.
+                if !modifier {
+                    self.modifiers(state, modifiers)?;
+                }
                 self.key_edge(state, vk, *edge == KeyState::Down, *repeat)?;
+                if modifier {
+                    if *edge == KeyState::Down {
+                        state.explicit_modifiers.insert(vk.0);
+                    } else {
+                        state.explicit_modifiers.remove(&vk.0);
+                    }
+                }
             }
             InteractiveInputEvent::Pointer {
                 phase,
@@ -328,7 +344,10 @@ impl InteractiveInputSession {
             })
             .collect::<Result<Vec<_>, _>>()?;
         for vk in [VK_LWIN, VK_SHIFT, VK_MENU, VK_CONTROL] {
-            if state.keys.contains_key(&vk.0) && !desired.contains(&vk) {
+            if state.keys.contains_key(&vk.0)
+                && !desired.contains(&vk)
+                && !state.explicit_modifiers.contains(&vk.0)
+            {
                 self.key_edge(state, vk, false, false)?;
             }
         }
@@ -638,6 +657,7 @@ impl InteractiveInputSession {
             }
         }
         state.keys.clear();
+        state.explicit_modifiers.clear();
     }
 
     /// Release held inputs on ownership loss or detach without invalidating

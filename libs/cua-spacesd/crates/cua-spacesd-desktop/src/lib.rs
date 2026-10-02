@@ -1253,6 +1253,7 @@ impl InteractiveInputProvider for CuaInteractiveInputProvider {
                 }
             };
             let expected = config.window;
+            let expected_region = config.region;
             let inner = self.0.clone();
             let target = target.clone();
             let validate = Box::new(move || {
@@ -1265,13 +1266,25 @@ impl InteractiveInputProvider for CuaInteractiveInputProvider {
                         ));
                     }
                 } else if let Some(display_id) = display_key(&target) {
-                    if !windows_display::displays()
-                        .iter()
-                        .any(|display| display.id == display_id)
-                    {
+                    let display = windows_display::displays()
+                        .into_iter()
+                        .find(|display| display.id == display_id)
+                        .ok_or_else(|| {
+                            ProviderError::new(
+                                ProviderErrorCode::TargetUnavailable,
+                                "display is gone",
+                            )
+                        })?;
+                    let region = Some((
+                        (display.bounds.0 * display.scale_factor).round() as i32,
+                        (display.bounds.1 * display.scale_factor).round() as i32,
+                        display.native_width_px,
+                        display.native_height_px,
+                    ));
+                    if region != expected_region {
                         return Err(ProviderError::new(
-                            ProviderErrorCode::TargetUnavailable,
-                            "display is gone",
+                            ProviderErrorCode::StaleTarget,
+                            "display geometry changed; reopen the stream",
                         ));
                     }
                 }
