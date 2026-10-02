@@ -44,7 +44,7 @@ fn posted_press_message(down: u32, double: u32, click_index: usize, wants_double
 ///
 /// Posting to the deepest child avoids the top-level window responding to
 /// WM_LBUTTONDOWN by activating itself (focus-steal).
-fn deepest_child(root: HWND, screen_pt: POINT) -> (HWND, POINT) {
+pub(crate) fn deepest_child(root: HWND, screen_pt: POINT) -> (HWND, POINT) {
     let mut current = root;
     for _ in 0..16 {
         let mut client = screen_pt;
