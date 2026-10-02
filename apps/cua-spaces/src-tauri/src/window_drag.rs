@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-MIT
 // Copyright (c) 2026 Cua AI, Inc.
 
-//! Dragging an app window onto a Space (macOS), on the cua SDK.
+//! Dragging an app window onto a Space (macOS and Windows), on the cua SDK.
 //!
 //! Detection, the window list and the dragged window's preview are the
 //! SDK's (`cua_teleport::ux::window`): a listen-only `CGEventTap` feeds the
@@ -34,7 +34,7 @@ use crate::commands::AppState;
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenWindow {
-    /// CoreGraphics window number (for the preview). 0 outside macOS.
+    /// Platform window id (Windows uses an opaque id, never a truncated HWND).
     pub window_id: u32,
     /// The app's catalog id (`vscode`, `firefox`, a bundle id).
     pub app_id: String,
@@ -215,8 +215,47 @@ pub async fn app_icon(
 /// and the switcher's frame. Empty off macOS. Synchronous, so Tauri runs it
 /// on the main thread, where AppKit's screens are read.
 #[tauri::command]
-pub fn drag_trigger_displays() -> Vec<cua_spaces_app_core::notch::drag_trigger::DragDisplay> {
-    cua_spaces_app_core::notch::drag_trigger::portal_displays(&imp::screen_facts())
+pub fn drag_trigger_displays(
+    app: AppHandle,
+) -> Vec<cua_spaces_app_core::notch::drag_trigger::DragDisplay> {
+    #[cfg(target_os = "windows")]
+    {
+        use crate::geometry::{logical_monitor, mode_size, top_center, DisplayStyle, WindowMode};
+        use cua_spaces_app_core::notch::drag_trigger::DragDisplay;
+        // The Windows portal is the existing plain top-edge tab. Use Tauri's
+        // actual monitor scales and the same geometry as the portal window,
+        // rather than manufacture a macOS safe area or notch.
+        app.available_monitors()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|monitor| {
+                let frame = logical_monitor(
+                    monitor.position().x,
+                    monitor.position().y,
+                    monitor.size().width,
+                    monitor.size().height,
+                    monitor.scale_factor(),
+                );
+                DragDisplay {
+                    frame,
+                    notch: top_center(frame, mode_size(WindowMode::Ambient, DisplayStyle::NoNotch)),
+                    prompt: top_center(
+                        frame,
+                        mode_size(WindowMode::AmbientTeleport, DisplayStyle::NoNotch),
+                    ),
+                    expanded: top_center(
+                        frame,
+                        mode_size(WindowMode::Switcher, DisplayStyle::NoNotch),
+                    ),
+                }
+            })
+            .collect()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        cua_spaces_app_core::notch::drag_trigger::portal_displays(&imp::screen_facts())
+    }
 }
 
 /// Install the global window-drag monitor if permitted and not already running.
@@ -237,7 +276,7 @@ pub async fn set_foreign_window_hidden(window_id: u32, hidden: bool) -> bool {
 
 /// Install the monitor once. Emits `window-drag-permission {false}` and
 /// returns `false` when it cannot run (no Accessibility permission, or not
-/// macOS).
+/// supported by the current platform).
 pub fn ensure_monitor(app: &AppHandle, state: &WindowDragState) -> bool {
     let mut slot = state.monitor.lock().unwrap_or_else(|p| p.into_inner());
     if slot.is_some() {

@@ -23,10 +23,11 @@
 //!
 //! [`WindowDragTracker`] is that state machine over any [`WindowSource`], so
 //! it is tested with fixture window lists. [`WindowDragMonitor`] runs it on
-//! the real machine: macOS today (a listen-only `CGEventTap`, which needs
-//! the Accessibility permission). Linux and Windows return
+//! the real machine: macOS (a listen-only `CGEventTap`, which needs
+//! the Accessibility permission), Windows (out-of-context WinEvent hooks
+//! on this user's desktop, without input injection). Linux returns
 //! [`UxError::Unsupported`]: Wayland does not let a client observe other
-//! apps' windows or the global pointer, and the X11 and Windows backends are
+//! apps' windows or the global pointer, and the X11 backend is
 //! not built yet.
 //!
 //! The dragged window's preview is [`capture_thumbnail_png`]: that one
@@ -421,30 +422,36 @@ fn guard() -> Result<(), UxError> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn unsupported() -> UxError {
     UxError::Unsupported(if cfg!(target_os = "linux") {
         "window-drag detection is macOS only today: Wayland does not let a client observe \
          other apps' windows or the pointer, and the X11 backend is not built yet"
             .into()
     } else {
-        "window-drag detection is macOS only today; the Windows backend is not built yet".into()
+        "window-drag detection is not implemented for this platform".into()
     })
 }
 
 /// Whether window-drag detection is available here.
 pub fn supported() -> bool {
-    cfg!(target_os = "macos")
+    cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
 /// Whether this process may observe global mouse events (macOS
-/// Accessibility). `false` elsewhere.
+/// Accessibility), or observe the current user's desktop (Windows).
 pub fn permission_granted() -> bool {
     #[cfg(target_os = "macos")]
     {
         super::window_macos::ax_trusted()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        // Windows user-desktop WinEvent observation needs no elevated token,
+        // Accessibility setting, UIAccess manifest, or injected hook DLL.
+        true
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         false
     }
@@ -458,7 +465,11 @@ pub fn request_permission() -> Result<bool, UxError> {
     {
         Ok(super::window_macos::request_ax_trust())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        Ok(permission_granted())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Err(unsupported())
     }
@@ -471,7 +482,11 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, UxError> {
     {
         Ok(super::window_macos::all_windows())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        Ok(super::window_windows::all_windows())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Err(unsupported())
     }
@@ -499,7 +514,14 @@ pub fn capture_thumbnail_png(window_id: u32, max_width: usize) -> Result<Option<
             max_width.clamp(16, 1024),
         ))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        Ok(super::window_windows::capture(
+            window_id,
+            max_width.clamp(16, 1024),
+        ))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (window_id, max_width);
         Err(unsupported())
@@ -511,12 +533,14 @@ pub fn capture_thumbnail_png(window_id: u32, max_width: usize) -> Result<Option<
 pub struct WindowDragMonitor {
     #[cfg(target_os = "macos")]
     inner: super::window_macos::Monitor,
+    #[cfg(target_os = "windows")]
+    inner: super::window_windows::Monitor,
 }
 
 impl WindowDragMonitor {
     /// Starts watching; `on_event` runs on the monitor thread. Fails with
     /// `PermissionDenied` without the Accessibility permission (macOS) and
-    /// `Unsupported` elsewhere.
+    /// `Unsupported` on platforms without an adapter.
     pub fn start(on_event: Box<dyn Fn(WindowDragEvent) + Send + 'static>) -> Result<Self, UxError> {
         guard()?;
         #[cfg(target_os = "macos")]
@@ -532,7 +556,13 @@ impl WindowDragMonitor {
                 inner: super::window_macos::Monitor::start(on_event)?,
             })
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            Ok(Self {
+                inner: super::window_windows::Monitor::start(on_event)?,
+            })
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = on_event;
             Err(unsupported())
@@ -541,7 +571,7 @@ impl WindowDragMonitor {
 
     /// Stops watching.
     pub fn stop(&self) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         self.inner.stop();
     }
 }
