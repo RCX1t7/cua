@@ -640,8 +640,24 @@ impl InteractiveInputSession {
         state.keys.clear();
     }
 
-    /// Called on ownership loss, disconnect and drop; idempotent.
+    /// Release held inputs on ownership loss or detach without invalidating
+    /// the lease. A reattached viewer can continue using the same session.
     pub fn release_all(&self) {
+        if let Some(state) = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            self.release_state(state);
+            state.scroll_x = 0.0;
+            state.scroll_y = 0.0;
+        }
+    }
+}
+
+impl Drop for InteractiveInputSession {
+    fn drop(&mut self) {
         if let Some(mut state) = self
             .state
             .lock()
@@ -650,12 +666,6 @@ impl InteractiveInputSession {
         {
             self.release_state(&mut state);
         }
-    }
-}
-
-impl Drop for InteractiveInputSession {
-    fn drop(&mut self) {
-        self.release_all();
     }
 }
 
