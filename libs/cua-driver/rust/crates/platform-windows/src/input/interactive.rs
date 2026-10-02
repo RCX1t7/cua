@@ -8,6 +8,8 @@
 //! that the application's state changed; embedders still verify that state.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -19,6 +21,9 @@ use cua_driver_core::interactive_input::{
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::UI::HiDpi::{
+    SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -57,8 +62,42 @@ fn hwnd(id: u64) -> HWND {
     HWND(id as *mut _)
 }
 
+/// Capture frames and DWM bounds use physical pixels. Native hit testing,
+/// client conversions and virtual-screen metrics must use the same units,
+/// even when an embedder's blocking worker inherited a DPI-unaware context.
+/// Restore the caller's context on every exit; never change process awareness.
+struct PhysicalCoordinates {
+    previous: DPI_AWARENESS_CONTEXT,
+    // DPI awareness belongs to the current thread, so this guard cannot move
+    // to another thread while a future or an embedder retains it.
+    _same_thread: PhantomData<Rc<()>>,
+}
+
+impl PhysicalCoordinates {
+    fn enter() -> Result<Self, InteractiveInputError> {
+        let previous =
+            unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        if previous == DPI_AWARENESS_CONTEXT::default() {
+            return Err(native(
+                "could not establish physical-pixel input coordinates; no input was sent",
+            ));
+        }
+        Ok(Self {
+            previous,
+            _same_thread: PhantomData,
+        })
+    }
+}
+
+impl Drop for PhysicalCoordinates {
+    fn drop(&mut self) {
+        let _ = unsafe { SetThreadDpiAwarenessContext(self.previous) };
+    }
+}
+
 impl InteractiveInputSession {
     pub fn open(config: InteractiveInputConfig) -> Result<Self, InteractiveInputError> {
+        let _coordinates = PhysicalCoordinates::enter()?;
         if config.window.is_some() == config.region.is_some() {
             return Err(InteractiveInputError::InvalidTarget(
                 "exactly one window or display region is required".into(),
@@ -184,6 +223,7 @@ impl InteractiveInputSession {
         batch: &InteractiveInputBatch,
     ) -> Result<InteractiveInputReceipt, InteractiveInputError> {
         let through = validate_batch(batch)?;
+        let _coordinates = PhysicalCoordinates::enter()?;
         let started = Instant::now();
         let mut guard = self
             .state
@@ -677,6 +717,9 @@ impl InteractiveInputSession {
     /// Release held inputs on ownership loss or detach without invalidating
     /// the lease. A reattached viewer can continue using the same session.
     pub fn release_all(&self) {
+        // Cleanup remains best effort if Windows cannot change the thread
+        // context; key/button ups must still be attempted on disconnect.
+        let _coordinates = PhysicalCoordinates::enter().ok();
         if let Some(state) = self
             .state
             .lock()
@@ -692,6 +735,7 @@ impl InteractiveInputSession {
 
 impl Drop for InteractiveInputSession {
     fn drop(&mut self) {
+        let _coordinates = PhysicalCoordinates::enter().ok();
         if let Some(mut state) = self
             .state
             .lock()
