@@ -23,6 +23,7 @@ import {
 } from "react";
 
 import { FEATURE } from "../model/spaces";
+import { hostOs } from "../model/host";
 import {
   reduceTransfer,
   transferProgress,
@@ -241,7 +242,9 @@ function ViewerSession({
     return () => window.clearTimeout(timer);
   }, [topbarNotice]);
   const openTeleport = () => {
-    void fleet.openTeleportPicker(space).catch(() => {});
+    void fleet.openTeleportPicker(space).catch((error: unknown) =>
+      setTopbarNotice(`Couldn't open app transfer: ${error instanceof Error ? error.message : String(error)}`),
+    );
   };
 
   // The "Launch Agent" dropdown: a button in the bar that opens a small dark
@@ -290,9 +293,11 @@ function ViewerSession({
       setTopbarNotice(`${agent.name} support is coming soon`);
       return;
     }
-    if (agent.launch === "teleport") {
+    if (agent.launch === "teleport" && hostOs() !== "windows") {
       // Straight to the teleport consent sheet for this agent's provider.
-      void fleet.launchAgent(space, agent.id, agent.name).catch(() => {});
+      void fleet.launchAgent(space, agent.id, agent.name).catch((error: unknown) =>
+        setTopbarNotice(`Couldn't open ${agent.name}: ${error instanceof Error ? error.message : String(error)}`),
+      );
       return;
     }
     if (agentInstalling) {
@@ -461,7 +466,9 @@ function ViewerSession({
               className="viewer-topbar-btn"
               aria-pressed={scaleMode === "actual"}
               onClick={() => setScaleMode((m) => (m === "fit" ? "actual" : "fit"))}
-              title={scaleMode === "fit" ? "Show at actual size (⌘0)" : "Scale to fit the window (⌘9)"}
+              title={scaleMode === "fit"
+                ? `Show at actual size (${hostOs() === "macos" ? "⌘" : "Ctrl+"}0)`
+                : `Scale to fit the window (${hostOs() === "macos" ? "⌘" : "Ctrl+"}9)`}
             >
               {scaleMode === "fit" ? "Actual Size" : "Fit to Window"}
             </button>

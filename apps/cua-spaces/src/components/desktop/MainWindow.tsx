@@ -70,7 +70,7 @@ import { OsIconMark } from '../OsIcon';
 import { SpaceWindowList } from '../SpaceWindowList';
 import TeleportDropZone from '../TeleportDropZone';
 import { ThisMachinePanel } from '../ThisMachinePanel';
-import { THIS_MACHINE_ID } from '../../model/host';
+import { THIS_MACHINE_ID, hostOs } from '../../model/host';
 import { Thumbnail } from '../Thumbnail';
 import { NewSpaceWizard, type CreatePlan, type SpaceHost } from './NewSpaceWizard';
 import type { Experiments } from '../../model/experiments';
@@ -317,6 +317,9 @@ export function MainWindow({
   useEffect(() => {
     if (launchChecked.current || !loginItem.isNative || !onboarding?.completed || !hostStatus) return;
     launchChecked.current = true;
+    // Older Windows installations with no saved choice must also opt in
+    // through Settings; providing Spaces or agents is not startup consent.
+    if (hostOs() === 'windows') return;
     void (async () => {
       const agents = await agentsBridge.agents().catch(() => []);
       const status = await loginItem.status();
@@ -569,10 +572,14 @@ export function MainWindow({
   const runAction = (id: DetailActionId, space: Space) => {
     switch (id) {
       case 'teleport':
-        void fleet.openTeleportPicker(viewerRequest(space));
+        void fleet.openTeleportPicker(viewerRequest(space)).catch((error: unknown) =>
+          setBanner({ tone: 'error', text: `Couldn't open app transfer: ${error instanceof Error ? error.message : String(error)}` })
+        );
         break;
       case 'pip':
-        void fleet.pinSpacePip(viewerRequest(space));
+        void fleet.pinSpacePip(viewerRequest(space)).catch((error: unknown) =>
+          setBanner({ tone: 'error', text: `Couldn't open preview: ${error instanceof Error ? error.message : String(error)}` })
+        );
         break;
       case 'share':
         setSharing(space);
@@ -586,7 +593,9 @@ export function MainWindow({
         setConfirmDelete(space.id);
         break;
       case 'open':
-        void fleet.openSpaceWindow(viewerRequest(space));
+        void fleet.openSpaceWindow(viewerRequest(space)).catch((error: unknown) =>
+          setBanner({ tone: 'error', text: `Couldn't open desktop: ${error instanceof Error ? error.message : String(error)}` })
+        );
         break;
       case 'cancel':
         // The row shows Cancelling, then goes (or says why the cancel failed).
@@ -603,7 +612,7 @@ export function MainWindow({
             type="button"
             className="dw-icon-btn"
             aria-label={chrome.newSpaceLabel}
-            title={`${chrome.newSpaceLabel} (${chrome.newSpaceShortcut})`}
+            title={`${chrome.newSpaceLabel} (${hostOs() === 'macos' ? chrome.newSpaceShortcut : 'Ctrl+N'})`}
             onClick={() => setWizard(true)}
           >
             <Sym name="plus" />
@@ -677,7 +686,7 @@ export function MainWindow({
             type="button"
             className="dw-icon-btn"
             aria-label={chrome.settingsLabel}
-            title={`${chrome.settingsLabel} (${chrome.settingsShortcut})`}
+            title={`${chrome.settingsLabel} (${hostOs() === 'macos' ? chrome.settingsShortcut : 'Ctrl+,'})`}
             aria-pressed={view === 'settings'}
             onClick={() => setView((v) => (v === 'settings' ? 'spaces' : 'settings'))}
           >

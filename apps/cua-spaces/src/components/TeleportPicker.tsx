@@ -17,6 +17,7 @@ import {
   type PickerGridTab,
 } from "../model/teleportFlow";
 import { AppTeleportPicker } from "./AppTeleportPicker";
+import { hostOs } from "../model/host";
 import { useGridLoads } from "./pickerLoads";
 import { PickerTileView, tileIconKey, tileThumbnailKey } from "./PickerTile";
 import { SearchGlyph } from "./SearchGlyph";
@@ -177,12 +178,21 @@ export function TeleportPicker({
               className="hp-tab"
               data-active={tab === t.id}
               aria-selected={tab === t.id}
+              disabled={hostOs() === "windows" && t.id === "space"}
+              title={hostOs() === "windows" && t.id === "space"
+                ? "Listing this computer's open windows is not available on Windows yet"
+                : undefined}
               onClick={() => setTab(t.id)}
             >
               {t.label}
             </button>
           ))}
         </div>
+        {hostOs() === "windows" && (
+          <p className="hp-status-hint" role="note">
+            Windows cannot list or drag this computer's app windows yet. App transfers follow each provider's capabilities and consent; sign in inside the Space when sign-in transfer is unavailable.
+          </p>
+        )}
         {tab === "apps" ? (
           <AppTeleportPicker
             key={generation}
