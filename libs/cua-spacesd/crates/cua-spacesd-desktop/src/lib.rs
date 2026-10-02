@@ -1246,8 +1246,14 @@ impl InteractiveInputProvider for CuaInteractiveInputProvider {
                 }
             } else {
                 let native = self.0.native(target)?;
+                let pid = u32::try_from(native.pid).map_err(|_| {
+                    ProviderError::new(
+                        ProviderErrorCode::TargetUnavailable,
+                        "native process identifier is outside the Windows range",
+                    )
+                })?;
                 InteractiveInputConfig {
-                    window: Some((native.pid, native.window_id)),
+                    window: Some((pid, native.window_id)),
                     region: None,
                     delivery_mode,
                 }
@@ -1259,7 +1265,7 @@ impl InteractiveInputProvider for CuaInteractiveInputProvider {
             let validate = Box::new(move || {
                 if let Some((pid, window_id)) = expected {
                     let current = inner.native(&target)?;
-                    if current.pid != pid || current.window_id != window_id {
+                    if current.pid != i64::from(pid) || current.window_id != window_id {
                         return Err(ProviderError::new(
                             ProviderErrorCode::TargetUnavailable,
                             "window identity changed",
