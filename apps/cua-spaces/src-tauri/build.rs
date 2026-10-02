@@ -10,6 +10,9 @@ fn main() {
             .join("windows-e2e.manifest");
         println!("cargo:rerun-if-changed=windows-e2e.manifest");
         println!("cargo:rustc-link-arg-examples=/MANIFEST:EMBED");
-        println!("cargo:rustc-link-arg-examples=/MANIFESTINPUT:{}", manifest.display());
+        println!(
+            "cargo:rustc-link-arg-examples=/MANIFESTINPUT:{}",
+            manifest.display()
+        );
     }
 }
