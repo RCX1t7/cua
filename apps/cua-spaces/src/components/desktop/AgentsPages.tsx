@@ -20,6 +20,7 @@ import {
   type NotificationInput,
 } from '../../model/persistent';
 import type { AgentsBridge } from '../../native/persistent';
+import { hostOs } from '../../model/host';
 import { readSetting, writeSetting } from '../../state/settings';
 import { featureSignals } from "../../model/telemetry";
 import { telemetryBridge } from "../../native/telemetry";
@@ -363,9 +364,9 @@ export function DrivePage({ bridge, now = Date.now }: { bridge: AgentsBridge; no
             disabled={v.busy}
             onClick={() => send({ type: 'open-volume', mounted: v.mountPath })}
           >
-            {v.openLabel}
+            {hostOs() === 'windows' ? v.openLabel.replace('Finder', 'File Explorer') : v.openLabel}
           </button>
-          {v.mountLine && <span className="st-note">{v.mountLine}</span>}
+          {v.mountLine && <span className="st-note">{hostOs() === 'windows' ? v.mountLine.replace('In Finder at', 'In File Explorer at') : v.mountLine}</span>}
         </div>
       )}
       {(v.devices.length > 0 || v.syncNote) && (
@@ -388,7 +389,7 @@ export function DrivePage({ bridge, now = Date.now }: { bridge: AgentsBridge; no
               <span className="st-value">{c.trailing}</span>
               {c.reveal && c.openLabel && (
                 <button type="button" className="dw-btn" disabled={v.busy} onClick={() => send({ type: 'reveal', path: c.reveal! })}>
-                  {c.openLabel}
+                  {hostOs() === 'windows' ? c.openLabel.replace('Finder', 'File Explorer') : c.openLabel}
                 </button>
               )}
               <button type="button" className="dw-btn" disabled={v.busy} onClick={() => send({ type: 'resolve', path: c.path })}>
