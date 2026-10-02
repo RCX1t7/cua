@@ -66,7 +66,7 @@ fn hwnd(id: u64) -> HWND {
 /// client conversions and virtual-screen metrics must use the same units,
 /// even when an embedder's blocking worker inherited a DPI-unaware context.
 /// Restore the caller's context on every exit; never change process awareness.
-struct PhysicalCoordinates {
+pub(crate) struct PhysicalCoordinates {
     previous: DPI_AWARENESS_CONTEXT,
     // DPI awareness belongs to the current thread, so this guard cannot move
     // to another thread while a future or an embedder retains it.
@@ -74,7 +74,7 @@ struct PhysicalCoordinates {
 }
 
 impl PhysicalCoordinates {
-    fn enter() -> Result<Self, InteractiveInputError> {
+    pub(crate) fn enter() -> Result<Self, InteractiveInputError> {
         let previous =
             unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
         if previous == DPI_AWARENESS_CONTEXT::default() {

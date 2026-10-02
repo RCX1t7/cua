@@ -552,8 +552,14 @@ impl ComputerService for Computer {
             .activity
             .announce(principal.as_ref().map(|p| p.id.as_str()).unwrap_or(""))
             .at(Some(rests_at));
+        let guard = announced
+            .acquire_for(std::time::Duration::from_secs(5))
+            .await
+            .map_err(|_| {
+                Status::resource_exhausted("input_busy: no native action was dispatched")
+            })?;
         let result = blocking(move || {
-            let _guard = announced.acquire_blocking();
+            let _guard = guard;
             state
                 .backend
                 .pointer(window_for_call.as_ref(), delivery, point, &action)
@@ -644,8 +650,14 @@ impl ComputerService for Computer {
             .0
             .activity
             .announce(principal.as_ref().map(|p| p.id.as_str()).unwrap_or(""));
+        let guard = announced
+            .acquire_for(std::time::Duration::from_secs(5))
+            .await
+            .map_err(|_| {
+                Status::resource_exhausted("input_busy: no native action was dispatched")
+            })?;
         let result = blocking(move || {
-            let _guard = announced.acquire_blocking();
+            let _guard = guard;
             state
                 .backend
                 .keyboard(window.as_ref(), delivery, &action)

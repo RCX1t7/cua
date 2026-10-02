@@ -584,8 +584,9 @@ impl cua_driver_core::server::ToolProvider for InputTools {
         let guard = self
             .activity
             .announce(&format!("cua-driver:{session}"))
-            .acquire()
-            .await;
+            .acquire_for(std::time::Duration::from_secs(5))
+            .await
+            .map_err(|_| "input_busy: no native action was dispatched".to_owned())?;
         let result = self.inner.invoke_tool(name, arguments).await;
         drop(guard);
         result

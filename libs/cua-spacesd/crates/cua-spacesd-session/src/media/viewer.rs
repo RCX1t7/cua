@@ -22,7 +22,7 @@
 //! that and the next packet sent carries the `discontinuity` flag.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -553,12 +553,15 @@ pub struct Viewer {
     latest_snapshot: Option<AccessibilitySnapshotId>,
     input_events_dispatched: Arc<AtomicU64>,
     /// Batches for the input worker, in arrival order (see `input_worker`).
-    input_jobs: Option<tokio::sync::mpsc::UnboundedSender<InputJob>>,
+    input_jobs: Option<tokio::sync::mpsc::Sender<InputJob>>,
+    input_closed: Arc<AtomicBool>,
 }
 
 /// How long `handle` waits for a batch's delivery before leaving its
 /// acknowledgement to the input worker.
 const INPUT_REPLY_BUDGET: Duration = Duration::from_millis(250);
+const INPUT_ADMISSION_BUDGET: Duration = Duration::from_secs(5);
+const MAX_QUEUED_INPUT_BATCHES: usize = 32;
 
 /// One accepted batch for the input worker.
 struct InputJob {
@@ -566,6 +569,7 @@ struct InputJob {
     batch: InteractiveInputBatch,
     through: u64,
     announced: crate::input_activity::Announced,
+    deadline: Instant,
     done: tokio::sync::oneshot::Sender<()>,
 }
 
@@ -576,6 +580,8 @@ async fn run_input_job(
     batch: InteractiveInputBatch,
     through: u64,
     announced: crate::input_activity::Announced,
+    deadline: Instant,
+    closed: Arc<AtomicBool>,
     dispatched: &AtomicU64,
 ) -> ServerMessage {
     let started = Instant::now();
@@ -593,13 +599,38 @@ async fn run_input_job(
             host_dispatch_us: None,
         })
     };
+    if closed.load(Ordering::Acquire) || Instant::now() >= deadline {
+        announced.cancel();
+        return nack(
+            ActionErrorCode::RateLimited,
+            "input expired before native dispatch".into(),
+        );
+    }
+    let guard = match announced
+        .acquire_for(deadline.saturating_duration_since(Instant::now()))
+        .await
+    {
+        Ok(guard) => guard,
+        Err(()) => {
+            return nack(
+                ActionErrorCode::RateLimited,
+                "input_busy: no native action was dispatched".into(),
+            )
+        }
+    };
     let result = tokio::task::spawn_blocking(move || {
-        let _guard = announced.acquire_blocking();
-        lease.dispatch(&batch)
+        // Refuse queued work before entering the native adapter. Once it has
+        // entered, this worker retains admission until the actual call ends.
+        if closed.load(Ordering::Acquire) || Instant::now() >= deadline {
+            guard.cancel();
+            return Ok(None);
+        }
+        let _guard = guard;
+        lease.dispatch(&batch).map(Some)
     })
     .await;
     match result {
-        Ok(Ok(outcome)) => {
+        Ok(Ok(Some(outcome))) => {
             dispatched.fetch_add(events, Ordering::Relaxed);
             ServerMessage::InteractiveInputAcknowledgement(InteractiveInputAcknowledgement {
                 session_id: session_id.clone(),
@@ -613,6 +644,10 @@ async fn run_input_job(
                 ),
             })
         }
+        Ok(Ok(None)) => nack(
+            ActionErrorCode::RateLimited,
+            "input expired before native dispatch".into(),
+        ),
         Ok(Err(error)) => nack(provider_code(&error), error.message),
         Err(error) => nack(ActionErrorCode::DeliveryFailed, error.to_string()),
     }
@@ -630,6 +665,7 @@ impl std::fmt::Debug for Viewer {
 
 impl Drop for Viewer {
     fn drop(&mut self) {
+        self.input_closed.store(true, Ordering::Release);
         self.session.detach(self.shared.id);
     }
 }
@@ -645,6 +681,7 @@ impl Viewer {
             latest_snapshot: None,
             input_events_dispatched: Arc::new(AtomicU64::new(0)),
             input_jobs: None,
+            input_closed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -912,13 +949,23 @@ impl Viewer {
             batch,
             through,
             announced,
+            deadline: Instant::now() + INPUT_ADMISSION_BUDGET,
             done,
         };
-        if let Err(tokio::sync::mpsc::error::SendError(job)) = self.input_worker().send(job) {
+        if let Err(error) = self.input_worker().try_send(job) {
+            let (job, message) = match error {
+                tokio::sync::mpsc::error::TrySendError::Full(job) => {
+                    (job, "input queue is full; no native action was dispatched")
+                }
+                tokio::sync::mpsc::error::TrySendError::Closed(job) => {
+                    (job, "the input worker stopped")
+                }
+            };
+            job.announced.cancel();
             return Some(nack(
                 job.through,
-                ActionErrorCode::DeliveryFailed,
-                "the input worker stopped".into(),
+                ActionErrorCode::RateLimited,
+                message.into(),
             ));
         }
         // The worker acknowledges the batch itself. A quick delivery (every
@@ -930,14 +977,16 @@ impl Viewer {
     }
 
     /// The ordered input worker of this socket, started on first use.
-    fn input_worker(&mut self) -> &tokio::sync::mpsc::UnboundedSender<InputJob> {
+    fn input_worker(&mut self) -> &tokio::sync::mpsc::Sender<InputJob> {
         let session_id = self.session_id();
         let shared = self.shared.clone();
         let dispatched = self.input_events_dispatched.clone();
+        let closed = self.input_closed.clone();
         #[cfg(target_os = "windows")]
         let session = self.session.clone();
         self.input_jobs.get_or_insert_with(|| {
-            let (jobs, mut queue) = tokio::sync::mpsc::unbounded_channel::<InputJob>();
+            let (jobs, mut queue) =
+                tokio::sync::mpsc::channel::<InputJob>(MAX_QUEUED_INPUT_BATCHES);
             tokio::spawn(async move {
                 #[cfg(target_os = "windows")]
                 let mut last_input = None;
@@ -950,8 +999,11 @@ impl Viewer {
                     // downs into an unwatched target. The current native job
                     // has already finished before this check; its held edges
                     // are released below, after all dispatch work has stopped.
-                    #[cfg(target_os = "windows")]
-                    if queue.is_closed() {
+                    if closed.load(Ordering::Acquire) || queue.is_closed() {
+                        job.announced.cancel();
+                        while let Ok(queued) = queue.try_recv() {
+                            queued.announced.cancel();
+                        }
                         break;
                     }
                     let ack = run_input_job(
@@ -960,6 +1012,8 @@ impl Viewer {
                         job.batch,
                         job.through,
                         job.announced,
+                        job.deadline,
+                        closed.clone(),
                         &dispatched,
                     )
                     .await;
