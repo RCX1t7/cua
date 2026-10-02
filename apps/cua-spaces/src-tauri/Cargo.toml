@@ -143,6 +143,16 @@ block2 = "0.6"
 core-graphics = "0.25"
 core-foundation = "0.10"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows Hello/PIN confirmation for device approval, sharing and permission
+# changes. Desktop interop attaches the system prompt to this app's HWND.
+windows = { version = "0.61", features = [
+    "Security_Credentials_UI",
+    "Win32_Foundation",
+    "Win32_System_WinRT",
+] }
+windows-future = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 libc = "0.2"
