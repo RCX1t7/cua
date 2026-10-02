@@ -51,6 +51,7 @@ import { createFromPlan } from '../../state/createSpace';
 import { RadialProgress } from '../RadialProgress';
 import { InstallerFlow } from '../InstallerFlow';
 import { SettingsPanel } from '../SettingsPanel';
+import { KeyvaultPanel } from '../KeyvaultPanel';
 import {
   ApproveSheet,
   ConfirmMachineSheet,
@@ -256,9 +257,11 @@ export function MainWindow({
   });
   const [banner, setBanner] = useState<Banner>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  const [view, setView] = useState<'spaces' | 'settings' | 'agents' | 'drive' | 'notifications'>(
+  const [view, setView] = useState<'spaces' | 'settings' | 'agents' | 'drive' | 'notifications' | 'keyvault'>(
     startView === 'settings'
       ? 'settings'
+      : startView === 'keyvault'
+        ? 'keyvault'
       : startView === 'drive'
         ? 'drive'
         : 'spaces'
@@ -662,6 +665,7 @@ export function MainWindow({
             {(
               [
                 ['agents', 'Agents'],
+                ['keyvault', 'Keyvault'],
                 ...(chrome.volumeLabel ? [['drive', chrome.volumeLabel] as const] : []),
                 ['notifications', 'Notifications'],
               ] as const
@@ -695,7 +699,9 @@ export function MainWindow({
       </aside>
 
       <main className="dw-main">
-        {view === 'agents' ? (
+        {view === 'keyvault' ? (
+          <KeyvaultPanel onClose={() => setView('spaces')} />
+        ) : view === 'agents' ? (
           <AgentsPage
             bridge={agentsBridge}
             thisMachine={sidebar.thisMachine?.id.startsWith('relay:') ? sidebar.thisMachine.id : null}
