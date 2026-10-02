@@ -215,10 +215,15 @@ impl InteractiveInputSession {
                 if self.foreground() {
                     // Composed text bypasses keyboard-layout/dead-key replay.
                     for unit in text.encode_utf16() {
-                        self.send(&[
+                        if let Err(error) = self.send(&[
                             keyboard::unicode_key_input(unit, false),
                             keyboard::unicode_key_input(unit, true),
-                        ])?;
+                        ]) {
+                            // A partial SendInput must not leave VK_PACKET
+                            // down even though the batch receives a nack.
+                            let _ = self.send(&[keyboard::unicode_key_input(unit, true)]);
+                            return Err(error);
+                        }
                     }
                 } else {
                     let (_, root) = self.config.window.ok_or(InteractiveInputError::Closed)?;
@@ -461,6 +466,15 @@ impl InteractiveInputSession {
             return Err(InteractiveInputError::InvalidBatch(
                 "pointer edge requires a button".into(),
             ));
+        }
+        if let Some(index) = index {
+            // Never release a physical button on an orphan remote up, or
+            // acquire the same edge twice after a repeated down.
+            if (phase == PointerPhase::Up && !state.buttons.contains_key(&index))
+                || (phase == PointerPhase::Down && state.buttons.contains_key(&index))
+            {
+                return Ok(());
+            }
         }
         let (sx, sy) = state.last_point;
         if self.foreground() {
