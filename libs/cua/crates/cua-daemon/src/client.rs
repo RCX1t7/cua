@@ -832,7 +832,7 @@ pub async fn existing_daemon() -> Result<DaemonClient> {
 }
 
 /// The `cua` CLI used to start a daemon: `CUA_BIN`, else this executable
-/// when it is the CLI, else `cua` on `PATH`.
+/// when it is the CLI, else the app's bundled CLI, else `cua` on `PATH`.
 pub fn cua_binary() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("CUA_BIN").filter(|v| !v.is_empty()) {
         let p = PathBuf::from(p);
@@ -842,6 +842,9 @@ pub fn cua_binary() -> Option<PathBuf> {
         && me.file_stem().is_some_and(|s| s == "cua")
     {
         return Some(me);
+    }
+    if let Some(bundled) = cua_home::bundled_cua() {
+        return Some(bundled);
     }
     let exe = if cfg!(windows) { "cua.exe" } else { "cua" };
     std::env::split_paths(&std::env::var_os("PATH")?)

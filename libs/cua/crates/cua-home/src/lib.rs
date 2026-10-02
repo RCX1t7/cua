@@ -28,7 +28,8 @@ use std::path::{Path, PathBuf};
 pub const CUA_TEST_ENV: &str = "CUA_TEST";
 
 /// The `cua` of the app bundle this process runs in
-/// (`<Name>.app/Contents/MacOS/cua`, symlinks resolved), when there is one:
+/// (`<Name>.app/Contents/MacOS/cua` on macOS, `cua.exe` beside
+/// `cua-spaces.exe` on Windows, symlinks resolved), when there is one:
 /// the `cua` an app ships and expects its daemon to run. `None` outside an
 /// app bundle (a CLI on `PATH`, a Python host).
 pub fn bundled_cua() -> Option<PathBuf> {
@@ -38,6 +39,17 @@ pub fn bundled_cua() -> Option<PathBuf> {
 /// [`bundled_cua`] for the executable `exe`.
 pub fn bundled_cua_of(exe: &Path) -> Option<PathBuf> {
     let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
+    #[cfg(windows)]
+    if exe.file_name().is_some_and(|name| {
+        name.to_string_lossy()
+            .eq_ignore_ascii_case("cua-spaces.exe")
+    }) {
+        // Tauri puts the CLI sidecar beside the installed app. Restrict this
+        // lookup to the Spaces executable: other SDK hosts and standalone
+        // CLIs still share the daemon according to the ordinary rules.
+        let cua = exe.parent()?.join("cua.exe");
+        return cua.canonicalize().ok().filter(|p| p.is_file());
+    }
     let bundle = exe
         .ancestors()
         .find(|d| d.extension().is_some_and(|e| e == "app"))?;
