@@ -578,8 +578,7 @@ pub fn run() {
                 // and the notch only, no main window, as when it is closed.
                 let quiet_start = login_item::launched_at_login(std::env::args())
                     && host::OnboardingStore::in_dir(
-                        &app.path()
-                            .app_config_dir()
+                        &webview_data::app_config_dir(app)
                             .unwrap_or_else(|_| core::cua_home().join("spaces-app")),
                     )
                     .completed();
@@ -605,9 +604,7 @@ pub fn run() {
             // `<cua home>/spaces-install-mode`.
             {
                 use tauri::Manager as _;
-                let config_dir = app
-                    .path()
-                    .app_config_dir()
+                let config_dir = webview_data::app_config_dir(app)
                     .unwrap_or_else(|_| core::cua_home().join("spaces-app"));
                 let installer_mode = host::installer_mode_from_args(std::env::args())
                     .or_else(|| host::installer_mode_from_file(&core::cua_home()));
