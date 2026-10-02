@@ -74,10 +74,47 @@ async function pickSurface(): Promise<React.ReactElement> {
 
 // The app core (wasm) loads before anything renders: every surface's models
 // call it synchronously.
+let startupPhase = "loading the app core";
+
+/** Startup can fail before React mounts, so this fallback uses only the DOM. */
+function showStartupError(error: unknown): void {
+  const root = document.getElementById("root") ?? document.body;
+  const panel = document.createElement("section");
+  panel.setAttribute("role", "alert");
+  Object.assign(panel.style, {
+    minHeight: "100vh",
+    padding: "32px",
+    background: "#18181b",
+    color: "#f4f4f5",
+    overflow: "auto",
+    userSelect: "text",
+  });
+  const title = document.createElement("h1");
+  title.textContent = "Cua Spaces could not start";
+  const context = document.createElement("p");
+  context.textContent = `Startup failed while ${startupPhase}.`;
+  const detail = document.createElement("pre");
+  detail.textContent = error instanceof Error ? error.message : String(error);
+  detail.style.whiteSpace = "pre-wrap";
+  detail.style.overflowWrap = "anywhere";
+  const retry = document.createElement("button");
+  retry.textContent = "Retry";
+  retry.addEventListener("click", () => window.location.reload());
+  panel.append(title, context, detail, retry);
+  root.replaceChildren(panel);
+}
+
 void initCore()
-  .then(pickSurface)
+  .then(() => {
+    startupPhase = "opening the window";
+    return pickSurface();
+  })
   .then((surface) => {
-  ReactDOM.createRoot(document.getElementById("root")!).render(
-    <React.StrictMode>{surface}</React.StrictMode>,
-  );
-});
+    startupPhase = "rendering the window";
+    const root = document.getElementById("root");
+    if (!root) throw new Error("The app's root element is missing.");
+    ReactDOM.createRoot(root, { onUncaughtError: showStartupError }).render(
+      <React.StrictMode>{surface}</React.StrictMode>,
+    );
+  })
+  .catch(showStartupError);
