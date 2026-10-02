@@ -78,6 +78,7 @@ import { useExperiments } from '../../state/experiments';
 import { createLoginItemBridge, type LoginItemBridge } from '../../native/loginItem';
 import { launchPlan, readLaunchChoice, writeLaunchChoice } from '../../model/loginItem';
 import { Sym } from './Sym';
+import { DesktopPreview } from '../../viewer/DesktopPreview';
 
 export interface MainWindowProps {
   fleet?: FleetBridge;
@@ -106,8 +107,6 @@ export interface MainWindowProps {
 }
 
 type Banner = { tone: 'info' | 'error'; text: string } | null;
-
-const SCREENSHOT_MS = 5_000;
 
 function viewerRequest(space: Space): ViewerWindowRequest {
   return { id: space.id, name: space.name, controller: 'you', os: space.os };
@@ -1038,6 +1037,8 @@ export function MainWindow({
 function Shortcuts({ onNew, onSettings }: { onNew: () => void; onSettings: () => void }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      // Keyboard shortcuts while the remote desktop has focus belong there.
+      if (event.target instanceof HTMLCanvasElement) return;
       if (!(event.metaKey || event.ctrlKey)) return;
       if (event.key.toLowerCase() === 'n') {
         event.preventDefault();
@@ -1144,26 +1145,6 @@ function SpaceDetail({
   windowDrag: WindowDragBridge;
   copyText?: WriteText;
 }) {
-  const [shot, setShot] = useState<string | null>(null);
-  const alive = useRef(true);
-  const reachable = Boolean(space.sdk?.reachable);
-
-  useEffect(() => {
-    alive.current = true;
-    if (!space.sdk || !reachable) return;
-    const grab = () =>
-      fleet
-        .screenshot(space.id, 1280)
-        .then((url) => alive.current && setShot(url))
-        .catch(() => {});
-    void grab();
-    const timer = window.setInterval(grab, SCREENSHOT_MS);
-    return () => {
-      alive.current = false;
-      window.clearInterval(timer);
-    };
-  }, [fleet, space.id, space.sdk, reachable]);
-
   const section = (title: string) => {
     switch (title) {
       case 'Stream':
@@ -1212,14 +1193,15 @@ function SpaceDetail({
 
   return (
     <div className="dw-content-inner">
-      <div className={shot ? 'dw-preview dw-preview-live' : 'dw-preview'}>
-        {shot ? (
-          <img src={shot} alt={`${space.name} desktop`} />
-        ) : space.sdk ? (
-          <div className="dw-preview-empty">
-            <Sym name="desktopcomputer" />
-            <span>{detail.previewText}</span>
-          </div>
+      <div className={space.sdk ? 'dw-preview dw-preview-live' : 'dw-preview'}>
+        {space.sdk ? (
+          <DesktopPreview
+            fleet={fleet}
+            spaceId={space.id}
+            spaceName={space.name}
+            available={detail.canStream && hasFeature(space, 'desktop_stream')}
+            unavailableReason={space.sdk.error ?? (!hasFeature(space, 'desktop_stream') ? 'This Space does not advertise desktop streaming.' : detail.previewText)}
+          />
         ) : detail.creditNotice ? (
           <div className="dw-preview-empty" role="alert">
             <span>{detail.creditNotice.text}</span>

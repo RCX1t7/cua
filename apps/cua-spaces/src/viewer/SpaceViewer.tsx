@@ -174,6 +174,8 @@ function ViewerSession({
   desktopStream: boolean;
 }) {
   const [phase, setPhase] = useState<Phase>(desktopStream ? "connecting" : "unsupported");
+  const [streamDetail, setStreamDetail] = useState<string | null>(null);
+  const [inputError, setInputError] = useState<string | null>(null);
   // Bumped by Retry/Reconnect to force a fresh session.
   const [attempt, setAttempt] = useState(0);
   // The remote desktop's pixel size (authoritative geometry from the stream),
@@ -516,13 +518,18 @@ function ViewerSession({
             audio={view === "space"}
             generation={attempt}
             onStatus={(status, detail) => {
+              setStreamDetail(detail ?? null);
               // A spacesd without desktop capture: say so instead of retrying.
-              if (status === "failed" && detail && /desktop_stream|capability/i.test(detail)) {
+              if (status === "failed" && detail && /desktop_stream|no desktop capture/i.test(detail)) {
                 setPhase("unsupported");
                 return;
               }
-              setPhase(phaseForStatus(status));
+              // An opened socket alone is not proof that the desktop painted.
+              setPhase(status === "streaming" ? "connecting" : phaseForStatus(status));
             }}
+            onFrame={() => setPhase("connected")}
+            onServerError={(error) => setInputError(`${String(error.code ?? "stream_error")}: ${String(error.message ?? "The server refused the operation.")}`)}
+            onInputAcknowledgement={(result) => setInputError(result.delivered ? null : `${result.error?.code ?? "delivery_failed"}: ${result.error?.message ?? "Input was not delivered; the server did not provide a reason."}`)}
             onGeometry={(width, height) => setFrameSize({ width, height })}
           />
         )}
@@ -533,7 +540,7 @@ function ViewerSession({
           {phase === "connecting" && <span>Connecting to {space.name}…</span>}
           {phase === "disconnected" && (
             <>
-              <span>Stream ended.</span>
+              <span>{streamDetail ?? "Stream ended."}</span>
               <button type="button" className="ghost-button" onClick={retry}>
                 Reconnect
               </button>
@@ -541,7 +548,7 @@ function ViewerSession({
           )}
           {phase === "failed" && (
             <>
-              <span>Could not reach the desktop stream.</span>
+              <span>{streamDetail ?? "Could not reach the desktop stream."}</span>
               <button type="button" className="ghost-button" onClick={retry}>
                 Retry
               </button>
@@ -550,6 +557,7 @@ function ViewerSession({
           {phase === "unsupported" && <span role="alert">{NO_DESKTOP_STREAM_MESSAGE}</span>}
         </div>
       )}
+      {inputError && <div className="viewer-topbar-notice" role="alert" style={{ position: 'absolute', bottom: 12, left: 12, right: 12, transform: 'none', zIndex: 10, padding: 12, color: '#fff', background: '#991b1b', whiteSpace: 'normal' }}>Input or stream operation refused: {inputError}</div>}
       {view === "space" && overlay && (
         <TransferOverlayView state={overlay} onRetry={retryTransfer} onCancel={cancelTransfer} />
       )}
