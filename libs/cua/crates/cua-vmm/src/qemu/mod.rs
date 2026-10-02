@@ -105,6 +105,10 @@ pub struct QemuState {
     pub qmp_port: Option<u16>,
     #[serde(default)]
     pub pid: Option<u32>,
+    /// Windows process instance identity; old state files cannot authorize a kill.
+    #[cfg(windows)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_identity: Option<host::ProcessIdentity>,
     #[serde(default)]
     pub accel: String,
     #[serde(default)]
@@ -230,10 +234,24 @@ impl QemuRuntime {
     }
 
     fn is_running(st: &QemuState) -> bool {
-        st.pid.is_some_and(host::pid_alive)
+        #[cfg(windows)]
+        {
+            match (st.pid, st.process_identity.as_ref()) {
+                (Some(pid), Some(identity)) => host::process_matches(pid, identity),
+                _ => false,
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            st.pid.is_some_and(host::pid_alive)
+        }
     }
 
     fn status_of(st: &QemuState) -> Status {
+        #[cfg(windows)]
+        if Self::ensure_known_process(st).is_err() {
+            return Status::Unknown("Windows process identity was not recorded".into());
+        }
         match st.kind {
             EntryKind::Base | EntryKind::Checkpoint => Status::Stopped,
             EntryKind::Instance if Self::is_running(st) => {
@@ -402,6 +420,8 @@ impl QemuRuntime {
                 vnc_display: None,
                 qmp_port: None,
                 pid: None,
+                #[cfg(windows)]
+                process_identity: None,
                 accel: String::new(),
                 ssh: spec_like.ssh.clone(),
                 restrict_network: spec_like.restrict_network,
@@ -543,19 +563,35 @@ impl QemuRuntime {
         #[cfg(not(unix))]
         {
             let log = std::fs::File::create(&log_path)?;
-            let child = std::process::Command::new(&bin)
-                .args(&argv)
-                .stdout(log.try_clone()?)
-                .stderr(log)
-                .spawn()?;
+            let mut command = std::process::Command::new(&bin);
+            command.args(&argv).stdin(std::process::Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+                command.creation_flags(CREATE_NO_WINDOW);
+            }
+            let mut child = command.stdout(log.try_clone()?).stderr(log).spawn()?;
+            #[cfg(windows)]
+            {
+                // Keep the Child's original handle open while capturing identity.
+                // If capture fails, stop this child by its handle, never its PID.
+                st.process_identity = match host::process_identity(child.id()) {
+                    Ok(identity) => Some(identity),
+                    Err(error) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(error.into());
+                    }
+                };
+            }
             st.pid = Some(child.id());
         }
         self.save(st)?;
 
-        let pid = st.pid.expect("set above");
         let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
         let mut q = loop {
-            if !host::pid_alive(pid) {
+            if !Self::is_running(st) {
                 return Err(VmmError::Command {
                     cmd: format!("{} (see {})", bin.display(), dir.join("cmdline").display()),
                     code: None,
@@ -625,6 +661,7 @@ impl QemuRuntime {
     /// Open a QMP session to a running instance.
     pub async fn qmp(&self, name: &str) -> Result<QmpClient> {
         let st = self.load(name)?;
+        Self::ensure_known_process(&st)?;
         if !Self::is_running(&st) {
             return Err(VmmError::invalid(format!(
                 "sandbox '{name}' is not running"
@@ -649,6 +686,7 @@ impl QemuRuntime {
     /// Move an instance's writable disk into the shared layer store and give
     /// the instance a fresh overlay on top of it. Returns the frozen layer.
     async fn freeze(&self, st: &mut QemuState) -> Result<PathBuf> {
+        Self::ensure_known_process(st)?;
         let layers = self.layers_dir();
         std::fs::create_dir_all(&layers)?;
         let layer = layers.join(format!("{}-{}.qcow2", st.name, unique_suffix()));
@@ -723,19 +761,33 @@ impl QemuRuntime {
         Ok(out)
     }
 
-    async fn wait_exit(pid: u32, timeout: Duration) -> bool {
+    async fn wait_exit(st: &QemuState, timeout: Duration) -> bool {
         let deadline = tokio::time::Instant::now() + timeout;
         while tokio::time::Instant::now() < deadline {
-            if !host::pid_alive(pid) {
+            if !Self::is_running(st) {
                 return true;
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        !host::pid_alive(pid)
+        !Self::is_running(st)
+    }
+
+    fn ensure_known_process(st: &QemuState) -> Result<()> {
+        #[cfg(windows)]
+        if st.process_identity.is_none() && st.pid.is_some_and(host::pid_alive) {
+            return Err(VmmError::other(
+                "Windows QEMU state has a live PID without a recorded process identity; \
+                 refusing to control, restart or modify its disk",
+            ));
+        }
+        #[cfg(not(windows))]
+        let _ = st;
+        Ok(())
     }
 
     async fn force_stop(&self, st: &mut QemuState, graceful: Duration) -> Result<()> {
-        let Some(pid) = st.pid.filter(|p| host::pid_alive(*p)) else {
+        Self::ensure_known_process(st)?;
+        let Some(pid) = st.pid.filter(|_| Self::is_running(st)) else {
             st.pid = None;
             return Ok(());
         };
@@ -743,7 +795,7 @@ impl QemuRuntime {
             if let Ok(mut q) = self.qmp(&st.name).await {
                 let _ = q.system_powerdown().await;
             }
-            if Self::wait_exit(pid, graceful).await {
+            if Self::wait_exit(st, graceful).await {
                 st.pid = None;
                 return Ok(());
             }
@@ -751,9 +803,20 @@ impl QemuRuntime {
         if let Ok(mut q) = self.qmp(&st.name).await {
             let _ = q.quit().await;
         }
-        if !Self::wait_exit(pid, Duration::from_secs(5)).await {
+        if !Self::wait_exit(st, Duration::from_secs(5)).await {
+            #[cfg(windows)]
+            host::terminate_process(pid, st.process_identity.as_ref().expect("checked above"))?;
+            #[cfg(not(windows))]
             host::signal(pid, "KILL");
-            Self::wait_exit(pid, Duration::from_secs(5)).await;
+            let exited = Self::wait_exit(st, Duration::from_secs(5)).await;
+            #[cfg(windows)]
+            if !exited {
+                return Err(VmmError::other(
+                    "QEMU did not exit after forced termination",
+                ));
+            }
+            #[cfg(not(windows))]
+            let _ = exited;
         }
         st.pid = None;
         Ok(())
@@ -986,6 +1049,8 @@ impl Runtime for QemuRuntime {
             vnc_display: None,
             qmp_port: None,
             pid: None,
+            #[cfg(windows)]
+            process_identity: None,
             accel: String::new(),
             ssh: None,
             restrict_network: false,
@@ -1071,6 +1136,7 @@ impl Runtime for QemuRuntime {
             }
         };
 
+        Self::ensure_known_process(&st)?;
         if !Self::is_running(&st) {
             // Linux guests always get SSH access: the caller's, the one this
             // instance already has, or a managed per-instance key.
@@ -1197,6 +1263,8 @@ impl Runtime for QemuRuntime {
             vnc_display: None,
             qmp_port: None,
             pid: None,
+            #[cfg(windows)]
+            process_identity: None,
             snapshots: vec![],
             paused: false,
             seed_iso: None,
@@ -1242,6 +1310,8 @@ impl Runtime for QemuRuntime {
             firmware,
             ports: BTreeMap::new(),
             pid: None,
+            #[cfg(windows)]
+            process_identity: None,
             qmp_port: None,
             vnc_display: None,
             snapshots: vec![],

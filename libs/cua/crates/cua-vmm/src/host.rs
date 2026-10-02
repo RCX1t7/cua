@@ -205,10 +205,159 @@ pub fn pid_alive(pid: u32) -> bool {
             .map(|s| s.success())
             .unwrap_or(false)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows_process::Process::open(pid, false)
+            .and_then(|process| process.is_alive())
+            .unwrap_or(false)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         false
+    }
+}
+
+/// Identity of one Windows process instance, not merely a reusable PID.
+#[cfg(windows)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessIdentity {
+    pub creation_time_100ns: u64,
+    pub executable: PathBuf,
+}
+
+#[cfg(windows)]
+pub fn process_identity(pid: u32) -> std::io::Result<ProcessIdentity> {
+    windows_process::Process::open(pid, false)?.identity()
+}
+
+#[cfg(windows)]
+pub fn process_matches(pid: u32, expected: &ProcessIdentity) -> bool {
+    windows_process::Process::open(pid, false)
+        .and_then(|process| Ok(process.identity()? == *expected && process.is_alive()?))
+        .unwrap_or(false)
+}
+
+/// Terminate only the recorded process instance. Validation and termination
+/// use the same handle, so PID reuse cannot redirect the termination.
+#[cfg(windows)]
+pub fn terminate_process(pid: u32, expected: &ProcessIdentity) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    use windows_sys::Win32::System::Threading::{TerminateProcess, WaitForSingleObject};
+
+    let process = windows_process::Process::open(pid, true)?;
+    if process.identity()? != *expected {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "refusing to terminate a process whose creation time or executable differs",
+        ));
+    }
+    if !process.is_alive()? {
+        return Ok(());
+    }
+    // SAFETY: this owned handle has PROCESS_TERMINATE rights and was checked
+    // against the persisted identity. No second PID lookup occurs here.
+    if unsafe { TerminateProcess(process.handle, 1) } == 0 {
+        let error = std::io::Error::last_os_error();
+        if process.is_alive()? {
+            return Err(error);
+        }
+    }
+    // TerminateProcess is asynchronous; do not report success until it exits.
+    if unsafe { WaitForSingleObject(process.handle, 5_000) } != WAIT_OBJECT_0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "the recorded Windows process did not exit after termination",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+mod windows_process {
+    use std::os::windows::ffi::OsStringExt;
+
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, FILETIME, HANDLE, STILL_ACTIVE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, QueryFullProcessImageNameW, WaitForSingleObject,
+    };
+
+    pub(super) struct Process {
+        pub(super) handle: HANDLE,
+    }
+
+    impl Process {
+        pub(super) fn open(pid: u32, terminate: bool) -> std::io::Result<Self> {
+            let rights = PROCESS_QUERY_LIMITED_INFORMATION
+                | PROCESS_SYNCHRONIZE
+                | if terminate { PROCESS_TERMINATE } else { 0 };
+            // SAFETY: no pointers are supplied, and handle inheritance is off.
+            let handle = unsafe { OpenProcess(rights, 0, pid) };
+            if handle.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(Self { handle })
+        }
+
+        pub(super) fn is_alive(&self) -> std::io::Result<bool> {
+            // A signalled process is dead even if its exit code is 259
+            // (STILL_ACTIVE), which GetExitCodeProcess alone cannot distinguish.
+            match unsafe { WaitForSingleObject(self.handle, 0) } {
+                WAIT_OBJECT_0 => Ok(false),
+                WAIT_TIMEOUT => {
+                    let mut code = 0;
+                    if unsafe { GetExitCodeProcess(self.handle, &mut code) } == 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(code == STILL_ACTIVE as u32)
+                }
+                _ => Err(std::io::Error::last_os_error()),
+            }
+        }
+
+        pub(super) fn identity(&self) -> std::io::Result<super::ProcessIdentity> {
+            let mut creation = FILETIME::default();
+            let mut exit = FILETIME::default();
+            let mut kernel = FILETIME::default();
+            let mut user = FILETIME::default();
+            // SAFETY: all output pointers refer to initialized FILETIME values.
+            if unsafe {
+                GetProcessTimes(
+                    self.handle,
+                    &mut creation,
+                    &mut exit,
+                    &mut kernel,
+                    &mut user,
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut image = vec![0u16; 32_768];
+            let mut length = image.len() as u32;
+            // SAFETY: the buffer holds `length` UTF-16 code units.
+            if unsafe {
+                QueryFullProcessImageNameW(self.handle, 0, image.as_mut_ptr(), &mut length)
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(super::ProcessIdentity {
+                creation_time_100ns: (u64::from(creation.dwHighDateTime) << 32)
+                    | u64::from(creation.dwLowDateTime),
+                executable: std::ffi::OsString::from_wide(&image[..length as usize]).into(),
+            })
+        }
+    }
+
+    impl Drop for Process {
+        fn drop(&mut self) {
+            // SAFETY: the handle was opened by this value and is closed once.
+            unsafe { CloseHandle(self.handle) };
+        }
     }
 }
 
