@@ -21,6 +21,7 @@ import type { OpenWindow } from "../model/teleport";
 
 import { displayPath, displayPaths } from "../model/paths";
 import { hasTauri } from "../native/bridge";
+import { hostOs } from "../model/host";
 import { useGridLoads } from "./pickerLoads";
 import { PickerTileView } from "./PickerTile";
 import { SearchGlyph } from "./SearchGlyph";
@@ -329,7 +330,7 @@ export function AppTeleportPicker({
               Back
             </button>
             <span className="hp-footer-note">
-              {p.totalBytes ? `${formatBytes(p.totalBytes)} leaves this Mac` : "Nothing leaves this Mac"}
+              {p.totalBytes ? `${formatBytes(p.totalBytes)} leaves ${hostOs() === "macos" ? "this Mac" : "this computer"}` : `Nothing leaves ${hostOs() === "macos" ? "this Mac" : "this computer"}`}
             </span>
             <div className="hp-footer-right">
               <button type="button" className="hp-cancel" onClick={onClose}>

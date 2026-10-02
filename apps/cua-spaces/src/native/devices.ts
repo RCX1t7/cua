@@ -7,8 +7,8 @@ import { hasTauri } from "./bridge";
 /**
  * This device on the relay: the shell's `devices_*` commands over
  * `cua-host` (enrollment, the account's devices and audit log). Approving
- * asks for presence in the shell (Touch ID or the login password on macOS,
- * else the Keyvault passphrase) before anything reaches the relay.
+ * asks for presence in the shell (the platform's verification prompt, or
+ * a Keyvault passphrase when required) before anything reaches the relay.
  */
 export interface DevicesBridge {
   readonly isNative: boolean;
@@ -72,7 +72,7 @@ export function createDevicesBridge(): DevicesBridge {
 /**
  * In-memory relay for tests and design work: `enroll` answers with a code
  * (or enrolls when `firstDevice`), approvals flip a pending device, and
- * `presenceFails` makes approve refuse as a cancelled Touch ID would.
+   * `presenceFails` makes approve refuse as cancelled OS verification would.
  */
 export function createFakeDevicesBridge(
   options: {
