@@ -108,6 +108,7 @@ pub fn context_endpoint(
 }
 
 /// Well-known engine sockets, most specific first.
+#[cfg(not(windows))]
 fn well_known_sockets() -> Vec<PathBuf> {
     let home = host::home_dir();
     let mut v = vec![
@@ -150,17 +151,31 @@ pub fn discover() -> Option<EngineEndpoint> {
             });
         }
     }
-    well_known_sockets()
-        .into_iter()
-        .find(|p| p.exists())
-        .map(|p| {
-            let uri = format!("unix://{}", p.display());
-            EngineEndpoint {
-                kind: classify(&uri),
-                uri,
-                source: "socket".into(),
-            }
+    #[cfg(windows)]
+    {
+        // The CLI's default Windows context uses a named pipe, not one of
+        // the Unix socket paths below. Discovery identifies an endpoint;
+        // Docker Info still determines whether its daemon is available.
+        Some(EngineEndpoint {
+            uri: "npipe:////./pipe/docker_engine".into(),
+            source: "platform default".into(),
+            kind: EngineKind::Unknown,
         })
+    }
+    #[cfg(not(windows))]
+    {
+        well_known_sockets()
+            .into_iter()
+            .find(|p| p.exists())
+            .map(|p| {
+                let uri = format!("unix://{}", p.display());
+                EngineEndpoint {
+                    kind: classify(&uri),
+                    uri,
+                    source: "socket".into(),
+                }
+            })
+    }
 }
 
 #[cfg(test)]
