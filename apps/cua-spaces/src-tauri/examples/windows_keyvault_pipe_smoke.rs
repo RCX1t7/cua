@@ -40,7 +40,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let fixture_home = PathBuf::from(std::env::var("CUA_WINDOWS_KEYVAULT_E2E_HOME")?);
     if !fixture_home.is_absolute()
-        || fixture_home.file_name().is_some_and(|n| n == ".cua")
+        || fixture_home.components().any(|component| {
+            component
+                .as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(".cua")
+        })
         || fixture_home.parent().is_none()
     {
         return Err("supply a new absolute task scratch directory, never the Cua home".into());
@@ -62,6 +67,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let endpoint = fixture_home.join("keyvault.sock");
 
     if std::env::args().nth(1).as_deref() == Some("--fixture-server") {
+        if !fixture_home.is_dir() || fixture_home.join("vault").exists() {
+            return Err("fixture server requires its freshly created empty scratch vault".into());
+        }
         let broker = Arc::new(Broker::new(
             BrokerConfig {
                 dir: fixture_home.join("vault"),
