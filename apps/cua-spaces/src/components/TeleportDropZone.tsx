@@ -140,7 +140,7 @@ export default function TeleportDropZone({
       // Set the shared lock before the first await (also covers drops during
       // the React render gap or while this tab is hidden).
       transfer.set({ kind: "sending", paths, completedItems: earlierCount, totalItems,
-        currentPath: paths[0], files: earlierFiles });
+        currentPath: paths[0] ?? null, files: earlierFiles });
       try {
         const files = fileSend.sendFilesWithProgress
           ? await fileSend.sendFilesWithProgress(spaceId, paths, (progress) =>

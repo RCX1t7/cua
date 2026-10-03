@@ -91,7 +91,7 @@ export function createTauriFileSendBridge(): FileSendBridge {
     const files: SentFile[] = [];
     for (let index = 0; index < paths.length; index++) {
       const progress = (): FileSendProgress => ({
-        completedItems: index, totalItems: paths.length, currentPath: paths[index], files: [...files],
+        completedItems: index, totalItems: paths.length, currentPath: paths[index] ?? null, files: [...files],
       });
       onProgress?.(progress());
       try {
