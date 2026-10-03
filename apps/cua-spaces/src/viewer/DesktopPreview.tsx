@@ -11,20 +11,29 @@ import { MediaCanvas, toMediaTicket } from "./WindowStream";
 
 const AUTO_CONNECT_KEY = "cua.settings.autoConnect";
 
-/** The main detail uses the same interactive player as the standalone viewer. */
-export function DesktopPreview({
-  fleet,
-  spaceId,
-  spaceName,
-  available,
-  unavailableReason,
-}: {
+interface DesktopPreviewProps {
   fleet: FleetBridge;
   spaceId: string;
   spaceName: string;
   available: boolean;
   unavailableReason: string;
-}) {
+}
+
+/** The main detail uses the same interactive player as the standalone viewer. */
+export function DesktopPreview(props: DesktopPreviewProps) {
+  // MediaCanvas reads current callbacks during teardown and pending opens.
+  // A distinct lifetime keeps the old Space's frames and session-close calls
+  // bound to that Space when selection changes.
+  return <DesktopPreviewSession key={props.spaceId} {...props} />;
+}
+
+function DesktopPreviewSession({
+  fleet,
+  spaceId,
+  spaceName,
+  available,
+  unavailableReason,
+}: DesktopPreviewProps) {
   const [autoConnect, setAutoConnect] = useState(() => readSetting(AUTO_CONNECT_KEY, "true") !== "false");
   const [requested, setRequested] = useState(autoConnect);
   const [attempt, setAttempt] = useState(0);
@@ -35,20 +44,6 @@ export function DesktopPreview({
   const [lastFrame, setLastFrame] = useState(() => getScreenshot(spaceId)?.dataUrl ?? null);
   const [inputError, setInputError] = useState<string | null>(null);
   const [inputDelivered, setInputDelivered] = useState(false);
-  useEffect(() => {
-    // The detail component is reused when selection changes. Its previous
-    // frame, input acknowledgement and manual connection choice belong only
-    // to the previous Space.
-    const on = readSetting(AUTO_CONNECT_KEY, "true") !== "false";
-    setAutoConnect(on);
-    setRequested(on);
-    setStatus("connecting");
-    setDetail(undefined);
-    setFrameRendered(false);
-    setInputError(null);
-    setInputDelivered(false);
-    setLastFrame(getScreenshot(spaceId)?.dataUrl ?? null);
-  }, [spaceId]);
   useEffect(() => {
     if (!available) {
       setFrameRendered(false);
