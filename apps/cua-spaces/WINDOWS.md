@@ -122,12 +122,15 @@ cleanup. The fixture recorded Ctrl, Shift and left-button release after the
 viewer disconnected. This is media-socket reattachment, not proof of automatic
 GUI recovery.
 
-An earlier native window run observed an actual caption drag's start, movement
-and release, with stable HWND/PID mapping and 1.25 DPI scaling. The final preview
-run passed its enumeration, DPI, geometry and image checks: all 12,544 sampled
-bottom-right pixels matched the fixture palette. Its full drag rerun timed out
-waiting for the official driver RPC, with no observed drag events; no retry or
-process termination was used. Treat that final drag flow as blocked.
+An earlier native caption-drag rerun timed out against the old retained server.
+The repaired server's fresh run passed: the passive native harness observed
+drag start, 29 continuing move events and release, with the window's logical
+origin changing from (26.4, 26.4) to (128.8, 103.2). HWND/PID identity and 1.25
+DPI scaling remained stable. All 12,544 sampled bottom-right preview pixels
+matched the fixture palette. No existing process was stopped or unlocked.
+Later that fixture HWND became invalid while its process remained alive;
+post-drag capture and that lifecycle transition are not established by the
+persisted drag proof. No further input or retry was sent to the stale handle.
 The separate Keyvault example passed two-process pipe, framing, encryption and
 synthetic-data operations; it explicitly used a fake presence/backend and does
 not establish native presence or production credential access.
@@ -152,28 +155,63 @@ Socket reattachment and UI automatic recovery are separate evidence. The
 client example exercises the former; VM boot, volume mounting, real account
 credential transfer and native Hello approval require additional verification.
 
-The final isolated GUI rendered its welcome page in the native WebView2 window,
-and its selected-window H.264 capture decoded 13 frames without errors.
-Its JS, CSS and WASM loaded successfully, with no reported runtime errors. A
-black selected-window capture from an occluded instance was not evidence of a
-startup failure. A bounded Get started click returned `delivered:false` with
-`no acknowledgement`, and the page did not advance. Complete connect-by-address
-interaction inside the GUI and automatic recovery are not certified by this
-run. A stalled legacy foreground action also holds the shared driver action
-coordinator, causing later activation calls to wait; the precise blocked native
-call was not established. The working owned-fixture media tests do not certify
-input into every WebView or window.
+The initial GUI input run stalled without an acknowledgement. On 2026-10-03,
+the repaired source passed a fresh isolated WebView2 input run: Get started
+received a delivery acknowledgement in 34 ms and advanced to Sign in. A new
+Skip click after contention received an acknowledgement in 8 ms and advanced
+to Agents. Actual Skip, Continue, Access other machines and Start using controls
+completed onboarding into the normal Spaces view. The Done startup checkbox
+remained off, and no agents, host services or real accounts were set up.
+JS, CSS and WASM loaded successfully, and selected-window H.264
+decoded without errors. These checks use the official driver/media protocol;
+DOM inspection only verifies the resulting page state.
+
+Foreground mouse delivery no longer joins another window's input queue or
+changes its styles/z-order. It verifies the exact PID/window and foreground
+before injection, uses physical coordinates, and releases owned button edges
+on failures. Admission to the desktop coordinator and pointer activity lock is
+bounded to five seconds. Media input has a bounded queue and rejects expired
+work before native dispatch; an already executing native call retains its
+guard until it actually completes. These deadlines do not cancel or unlock a
+running Windows call.
+
+A real ten-second drag into an owned fixture retained its native button edge
+for 10,062 ms and released normally. Concurrent core activation returned an
+explicit `input_busy` refusal; a GUI Skip input returned
+`delivered:false / rate_limited / input_busy` after 5,149 ms. The GUI remained
+on Sign in after the owner completed and a further observation period: the
+refused click did not execute later. A new click then succeeded. A separate
+500 ms drag produced native DOWN/UP 515 ms apart at different endpoints, with
+buttons and modifiers clear before and after. The fixture does not log every
+mouse-move event, and driver acceptance alone is not application-effect proof.
+
+The exact blocked call in the older retained process was not established.
+A separate owned-window probe demonstrated cross-thread synchronous style and
+position calls blocking for 1,203 ms, but that mechanism probe is not a stack
+trace of the old process. Background legacy style-delivery paths are outside
+this foreground repair. Complete connect-by-address interaction inside the
+GUI subsequently passed: normal controls opened the address form, entered the
+loopback fixture address and its synthetic token, and submitted Add Space.
+The form closed, a machine row appeared, the portal changed from zero to one
+Space, and the connected detail created its desktop canvas.
+The frontend reported `streaming` and `frameRendered=true`; the latter is set
+by the actual rendered-frame callback, not by creating a canvas element.
+The token was
+typed through the official MCP/driver from memory, with no clipboard, token
+command-line argument, logged value or real-account setup. No default desktop
+canvas screenshot was saved. Automatic GUI recovery and control through every
+guest window still require separate validation.
 
 | Capability | Windows evidence / status |
 | --- | --- |
-| Native Tauri/WebView2 client | Compiled and actual welcome page rendered |
-| Direct server connection and registry | Actual AppCore add/list/cleanup passed |
+| Native Tauri/WebView2 client | Compiled; actual onboarding completed with acknowledged input |
+| Direct server connection and registry | Actual GUI address/token submission connected; AppCore add/list/cleanup passed |
 | Files | Actual 3 MiB upload, SHA-256 and readback passed |
 | H.264 and native input | Decoding, background/foreground typing and view-only refusal passed |
 | Same-session socket reconnect | Frames, new input and held-input release passed |
 | Selected-window previews | Final DPI/pixel verification passed |
-| Native caption drag | Earlier run passed; final run blocked on official driver RPC |
-| Full GUI connection / automatic reconnect | Not certified |
+| Native caption drag | Fresh repaired run passed start, 29 moves, release and changed bounds |
+| GUI connection / automatic reconnect | Address-form connection passed; automatic recovery not certified |
 | Keyvault IPC | Two-process synthetic fixture passed; production credential access refuses by default |
 | Windows Hello approval | DeviceNotPresent; successful native approval unverified |
 | Browser account/session teleport | Not certified; no profile/cookie copying |
