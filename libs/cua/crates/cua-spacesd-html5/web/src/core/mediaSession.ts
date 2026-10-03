@@ -61,6 +61,15 @@ export interface SessionOpenedPayload {
   capabilities?: string[];
 }
 
+/** The host accepted input through this sequence; it does not prove an app changed. */
+export interface InteractiveInputAcknowledgement {
+  session_id: string;
+  through_sequence: number;
+  delivered: boolean;
+  error?: { code: string; message: string } | null;
+  host_dispatch_us?: number;
+}
+
 export interface MediaSessionOptions {
   canvas: HTMLCanvasElement;
   /** The first ticket. */
@@ -90,6 +99,7 @@ export interface MediaSessionOptions {
   onAudioConfig?: (config: AudioConfigMessage) => void;
   /** A server `error` control message. */
   onServerError?: (payload: Record<string, unknown>) => void;
+  onInputAcknowledgement?: (result: InteractiveInputAcknowledgement) => void;
   /** A frame was drawn (after decode). */
   onFrame?: (width: number, height: number) => void;
 }
@@ -409,6 +419,11 @@ export class MediaSession {
         }
         this.options.onServerError?.(p);
         break;
+      case "interactive_input_acknowledgement":
+        if (p.session_id === this.sessionId && typeof p.delivered === "boolean") {
+          this.options.onInputAcknowledgement?.(p as unknown as InteractiveInputAcknowledgement);
+        }
+        break;
       default:
         break;
     }
@@ -674,6 +689,10 @@ export class MediaSession {
     });
     on("pointerdown", (event) => {
       canvas.focus();
+      // Keep the matching pointerup even if a drag leaves the canvas.
+      if (typeof canvas.setPointerCapture === "function" && Number.isFinite(event.pointerId)) {
+        canvas.setPointerCapture(event.pointerId);
+      }
       this.queueInput({
         kind: "pointer",
         phase: "down",
@@ -691,6 +710,9 @@ export class MediaSession {
         ...point(event),
         modifiers: modifiersOf(event),
       });
+      if (typeof canvas.hasPointerCapture === "function" && canvas.hasPointerCapture(event.pointerId)) {
+        canvas.releasePointerCapture(event.pointerId);
+      }
     });
     on("contextmenu", (event) => event.preventDefault());
     on(

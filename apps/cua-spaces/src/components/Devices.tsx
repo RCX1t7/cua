@@ -25,6 +25,7 @@ import type { DevicesBridge } from "../native/devices";
 import { enrollSignals } from "../model/telemetry";
 import { telemetryBridge } from "../native/telemetry";
 import { relativeTime } from "./ThisMachinePanel";
+import { hostOs } from "../model/host";
 
 /** How often the page (and the approval watch) reads the relay. */
 export const DEVICES_POLL_MS = 60_000;
@@ -421,14 +422,22 @@ export function ApproveSheet({
     [devices],
   );
   const [passphrase, setPassphrase] = useState("");
-  const [needsPassphrase, setNeedsPassphrase] = useState(false);
+  const [needsPassphrase, setNeedsPassphrase] = useState<boolean | null>(null);
+  const [presenceError, setPresenceError] = useState<string | null>(null);
   useEffect(() => {
-    void bridge.needsPassphrase().then(setNeedsPassphrase, () => {});
+    let cancelled = false;
+    setNeedsPassphrase(null);
+    setPresenceError(null);
+    void bridge.needsPassphrase().then(
+      (needed) => { if (!cancelled) setNeedsPassphrase(needed); },
+      (error: unknown) => { if (!cancelled) setPresenceError(message(error)); },
+    );
+    return () => { cancelled = true; };
   }, [bridge]);
   const v = approveView(state, devices);
 
   const approve = async () => {
-    if (!v.canApprove || !v.request) return;
+    if (!v.canApprove || !v.request || needsPassphrase === null || presenceError) return;
     send({ type: "submit" });
     try {
       await bridge.approve({ code: v.request.code, deviceId: v.request.deviceId, passphrase: needsPassphrase ? passphrase : null });
@@ -463,6 +472,9 @@ export function ApproveSheet({
       >
         <h2 className="dv-sheet-title">{v.title}</h2>
         <p className="dv-sheet-text">{v.message}</p>
+        {needsPassphrase === null && !presenceError && <p className="dv-sheet-text" role="status">Checking the required verification method...</p>}
+        {needsPassphrase === false && hostOs() === "windows" && <p className="dv-sheet-text">Approval requires Windows verification (Windows Hello/PIN when configured). If verification is unavailable or cancelled, the device is not approved.</p>}
+        {presenceError && <p className="st-error" role="alert">Could not determine the required verification: {presenceError}</p>}
         {v.needsCode && (
           <label className="dw-field">
             <span>{v.codeLabel}</span>
@@ -502,7 +514,7 @@ export function ApproveSheet({
           <button
             type="submit"
             className="dw-btn dw-btn-primary"
-            disabled={!v.canApprove || (needsPassphrase && !passphrase)}
+            disabled={!v.canApprove || needsPassphrase === null || Boolean(presenceError) || (needsPassphrase && !passphrase)}
           >
             {v.approveLabel}
           </button>

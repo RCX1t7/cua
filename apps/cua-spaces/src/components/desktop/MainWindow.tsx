@@ -51,6 +51,7 @@ import { createFromPlan } from '../../state/createSpace';
 import { RadialProgress } from '../RadialProgress';
 import { InstallerFlow } from '../InstallerFlow';
 import { SettingsPanel } from '../SettingsPanel';
+import { KeyvaultPanel } from '../KeyvaultPanel';
 import {
   ApproveSheet,
   ConfirmMachineSheet,
@@ -70,7 +71,7 @@ import { OsIconMark } from '../OsIcon';
 import { SpaceWindowList } from '../SpaceWindowList';
 import TeleportDropZone from '../TeleportDropZone';
 import { ThisMachinePanel } from '../ThisMachinePanel';
-import { THIS_MACHINE_ID } from '../../model/host';
+import { THIS_MACHINE_ID, hostOs } from '../../model/host';
 import { Thumbnail } from '../Thumbnail';
 import { NewSpaceWizard, type CreatePlan, type SpaceHost } from './NewSpaceWizard';
 import type { Experiments } from '../../model/experiments';
@@ -78,6 +79,7 @@ import { useExperiments } from '../../state/experiments';
 import { createLoginItemBridge, type LoginItemBridge } from '../../native/loginItem';
 import { launchPlan, readLaunchChoice, writeLaunchChoice } from '../../model/loginItem';
 import { Sym } from './Sym';
+import { DesktopPreview } from '../../viewer/DesktopPreview';
 
 export interface MainWindowProps {
   fleet?: FleetBridge;
@@ -106,8 +108,6 @@ export interface MainWindowProps {
 }
 
 type Banner = { tone: 'info' | 'error'; text: string } | null;
-
-const SCREENSHOT_MS = 5_000;
 
 function viewerRequest(space: Space): ViewerWindowRequest {
   return { id: space.id, name: space.name, controller: 'you', os: space.os };
@@ -257,9 +257,11 @@ export function MainWindow({
   });
   const [banner, setBanner] = useState<Banner>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  const [view, setView] = useState<'spaces' | 'settings' | 'agents' | 'drive' | 'notifications'>(
+  const [view, setView] = useState<'spaces' | 'settings' | 'agents' | 'drive' | 'notifications' | 'keyvault'>(
     startView === 'settings'
       ? 'settings'
+      : startView === 'keyvault'
+        ? 'keyvault'
       : startView === 'drive'
         ? 'drive'
         : 'spaces'
@@ -317,6 +319,9 @@ export function MainWindow({
   useEffect(() => {
     if (launchChecked.current || !loginItem.isNative || !onboarding?.completed || !hostStatus) return;
     launchChecked.current = true;
+    // Older Windows installations with no saved choice must also opt in
+    // through Settings; providing Spaces or agents is not startup consent.
+    if (hostOs() === 'windows') return;
     void (async () => {
       const agents = await agentsBridge.agents().catch(() => []);
       const status = await loginItem.status();
@@ -569,10 +574,14 @@ export function MainWindow({
   const runAction = (id: DetailActionId, space: Space) => {
     switch (id) {
       case 'teleport':
-        void fleet.openTeleportPicker(viewerRequest(space));
+        void fleet.openTeleportPicker(viewerRequest(space)).catch((error: unknown) =>
+          setBanner({ tone: 'error', text: `Couldn't open app transfer: ${error instanceof Error ? error.message : String(error)}` })
+        );
         break;
       case 'pip':
-        void fleet.pinSpacePip(viewerRequest(space));
+        void fleet.pinSpacePip(viewerRequest(space)).catch((error: unknown) =>
+          setBanner({ tone: 'error', text: `Couldn't open preview: ${error instanceof Error ? error.message : String(error)}` })
+        );
         break;
       case 'share':
         setSharing(space);
@@ -586,7 +595,9 @@ export function MainWindow({
         setConfirmDelete(space.id);
         break;
       case 'open':
-        void fleet.openSpaceWindow(viewerRequest(space));
+        void fleet.openSpaceWindow(viewerRequest(space)).catch((error: unknown) =>
+          setBanner({ tone: 'error', text: `Couldn't open desktop: ${error instanceof Error ? error.message : String(error)}` })
+        );
         break;
       case 'cancel':
         // The row shows Cancelling, then goes (or says why the cancel failed).
@@ -603,7 +614,7 @@ export function MainWindow({
             type="button"
             className="dw-icon-btn"
             aria-label={chrome.newSpaceLabel}
-            title={`${chrome.newSpaceLabel} (${chrome.newSpaceShortcut})`}
+            title={`${chrome.newSpaceLabel} (${hostOs() === 'macos' ? chrome.newSpaceShortcut : 'Ctrl+N'})`}
             onClick={() => setWizard(true)}
           >
             <Sym name="plus" />
@@ -633,8 +644,8 @@ export function MainWindow({
           )}
           {sidebar.sections.map((section) => (
             <div key={section.title}>
-              <div className="dw-nav-section">{section.title}</div>
-              <ul className="dw-nav-list" role="listbox" aria-label={section.title}>
+              <div className="dw-nav-section">{section.title === 'This Mac' && hostOs() !== 'macos' ? 'This computer' : section.title}</div>
+              <ul className="dw-nav-list" role="listbox" aria-label={section.title === 'This Mac' && hostOs() !== 'macos' ? 'This computer' : section.title}>
                 {section.rows.map((row) => (
                   <SpaceRowItem
                     key={row.id}
@@ -654,6 +665,7 @@ export function MainWindow({
             {(
               [
                 ['agents', 'Agents'],
+                ['keyvault', 'Keyvault'],
                 ...(chrome.volumeLabel ? [['drive', chrome.volumeLabel] as const] : []),
                 ['notifications', 'Notifications'],
               ] as const
@@ -677,7 +689,7 @@ export function MainWindow({
             type="button"
             className="dw-icon-btn"
             aria-label={chrome.settingsLabel}
-            title={`${chrome.settingsLabel} (${chrome.settingsShortcut})`}
+            title={`${chrome.settingsLabel} (${hostOs() === 'macos' ? chrome.settingsShortcut : 'Ctrl+,'})`}
             aria-pressed={view === 'settings'}
             onClick={() => setView((v) => (v === 'settings' ? 'spaces' : 'settings'))}
           >
@@ -687,7 +699,9 @@ export function MainWindow({
       </aside>
 
       <main className="dw-main">
-        {view === 'agents' ? (
+        {view === 'keyvault' ? (
+          <KeyvaultPanel onClose={() => setView('spaces')} />
+        ) : view === 'agents' ? (
           <AgentsPage
             bridge={agentsBridge}
             thisMachine={sidebar.thisMachine?.id.startsWith('relay:') ? sidebar.thisMachine.id : null}
@@ -1029,6 +1043,8 @@ export function MainWindow({
 function Shortcuts({ onNew, onSettings }: { onNew: () => void; onSettings: () => void }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      // Keyboard shortcuts while the remote desktop has focus belong there.
+      if (event.target instanceof HTMLCanvasElement) return;
       if (!(event.metaKey || event.ctrlKey)) return;
       if (event.key.toLowerCase() === 'n') {
         event.preventDefault();
@@ -1135,26 +1151,6 @@ function SpaceDetail({
   windowDrag: WindowDragBridge;
   copyText?: WriteText;
 }) {
-  const [shot, setShot] = useState<string | null>(null);
-  const alive = useRef(true);
-  const reachable = Boolean(space.sdk?.reachable);
-
-  useEffect(() => {
-    alive.current = true;
-    if (!space.sdk || !reachable) return;
-    const grab = () =>
-      fleet
-        .screenshot(space.id, 1280)
-        .then((url) => alive.current && setShot(url))
-        .catch(() => {});
-    void grab();
-    const timer = window.setInterval(grab, SCREENSHOT_MS);
-    return () => {
-      alive.current = false;
-      window.clearInterval(timer);
-    };
-  }, [fleet, space.id, space.sdk, reachable]);
-
   const section = (title: string) => {
     switch (title) {
       case 'Stream':
@@ -1203,14 +1199,15 @@ function SpaceDetail({
 
   return (
     <div className="dw-content-inner">
-      <div className={shot ? 'dw-preview dw-preview-live' : 'dw-preview'}>
-        {shot ? (
-          <img src={shot} alt={`${space.name} desktop`} />
-        ) : space.sdk ? (
-          <div className="dw-preview-empty">
-            <Sym name="desktopcomputer" />
-            <span>{detail.previewText}</span>
-          </div>
+      <div className={space.sdk ? 'dw-preview dw-preview-live' : 'dw-preview'}>
+        {space.sdk ? (
+          <DesktopPreview
+            fleet={fleet}
+            spaceId={space.id}
+            spaceName={space.name}
+            available={detail.canStream && hasFeature(space, 'desktop_stream')}
+            unavailableReason={space.sdk.error ?? (!hasFeature(space, 'desktop_stream') ? 'This Space does not advertise desktop streaming.' : detail.previewText)}
+          />
         ) : detail.creditNotice ? (
           <div className="dw-preview-empty" role="alert">
             <span>{detail.creditNotice.text}</span>

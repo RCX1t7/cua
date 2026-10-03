@@ -45,6 +45,17 @@ core-foundation = "0.10"
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows Credential Manager (DPAPI-protected) holds the key-encryption key.
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Security_Cryptography_Catalog",
+    "Win32_Security_Cryptography_Sip",
+    "Win32_Security_WinTrust",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 tempfile.workspace = true

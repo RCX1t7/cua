@@ -17,6 +17,7 @@ import {
   type PickerGridTab,
 } from "../model/teleportFlow";
 import { AppTeleportPicker } from "./AppTeleportPicker";
+import { hostOs } from "../model/host";
 import { useGridLoads } from "./pickerLoads";
 import { PickerTileView, tileIconKey, tileThumbnailKey } from "./PickerTile";
 import { SearchGlyph } from "./SearchGlyph";
@@ -183,6 +184,11 @@ export function TeleportPicker({
             </button>
           ))}
         </div>
+        {hostOs() === "windows" && (
+          <p className="hp-status-hint" role="note">
+            Choose an open window or drag it to a Space to review its app. Session transfer depends on the provider and native approval; sign in inside the Space when transfer is unavailable.
+          </p>
+        )}
         {tab === "apps" ? (
           <AppTeleportPicker
             key={generation}
@@ -424,7 +430,7 @@ function PickView({
             disabled={!primary.enabled}
             onClick={() => current && activate(current)}
           >
-            {primary.label}
+            {hostOs() === "macos" ? primary.label : primary.label.replace("This Mac", "This computer")}
           </button>
         </div>
       </footer>

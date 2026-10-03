@@ -8,8 +8,8 @@
 //!
 //! Approving another device widens who can reach the account's machines,
 //! so [`DevicesService::approve`] asks for presence first: Touch ID or the
-//! login password on macOS (the app's existing biometric gate), elsewhere
-//! the Keyvault passphrase, checked by the broker. Nothing else prompts:
+//! login password on macOS, Windows Hello/PIN on Windows, elsewhere the
+//! Keyvault passphrase, checked by the broker. Nothing else prompts:
 //! unattended agents keep their device session without the user.
 
 use std::collections::HashMap;
@@ -200,7 +200,7 @@ impl DevicesService {
     }
 }
 
-/// The app's presence gate: the biometric prompt on macOS, else the
+/// The app's presence gate: native confirmation on macOS/Windows, else the
 /// Keyvault passphrase checked by the broker.
 pub struct OsPresence<'a> {
     /// The Keyvault broker client (the passphrase check off macOS).
@@ -210,7 +210,7 @@ pub struct OsPresence<'a> {
 #[async_trait]
 impl PresenceGate for OsPresence<'_> {
     async fn confirm(&self, reason: &str, passphrase: Option<String>) -> Result<(), String> {
-        if cfg!(target_os = "macos") {
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
             let reason = reason.to_string();
             return tokio::task::spawn_blocking(move || crate::biometric::authorize(&reason))
                 .await
@@ -231,5 +231,5 @@ impl PresenceGate for OsPresence<'_> {
 
 /// Whether presence on this system is a passphrase the page must ask for.
 pub fn presence_needs_passphrase() -> bool {
-    !cfg!(target_os = "macos")
+    !cfg!(any(target_os = "macos", target_os = "windows"))
 }

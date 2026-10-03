@@ -3,17 +3,16 @@
 
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
+import { fileURLToPath } from "node:url";
 
 // The rcdp wire v2 client core is shared with the cua-spacesd HTML5 viewer.
-const html5Core = decodeURIComponent(new URL("../../libs/cua/crates/cua-spacesd-html5/web/src/core", import.meta.url).pathname);
+const html5Core = fileURLToPath(new URL("../../libs/cua/crates/cua-spacesd-html5/web/src/core", import.meta.url));
 // The cua SDK's browser-safe teleport UX core (`@trycua/cua/teleport`), used
 // from source so the app needs no prebuilt SDK package.
-const teleportCore = decodeURIComponent(
-  new URL("../../libs/cua/typescript/src/teleport", import.meta.url).pathname,
-);
+const teleportCore = fileURLToPath(new URL("../../libs/cua/typescript/src/teleport", import.meta.url));
 // The SDK's browser-safe presence model and shared cursor art
 // (`@trycua/cua/spaces/presence`), from source like the teleport core.
-const spacesCore = decodeURIComponent(new URL("../../libs/cua/typescript/src/spaces", import.meta.url).pathname);
+const spacesCore = fileURLToPath(new URL("../../libs/cua/typescript/src/spaces", import.meta.url));
 
 // Tauri expects a fixed dev-server port (see src-tauri/tauri.conf.json).
 export default defineConfig({

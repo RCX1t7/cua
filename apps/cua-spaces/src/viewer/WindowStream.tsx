@@ -19,7 +19,7 @@
  *   each gets its own media session in a draggable panel.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import type { RemoteWindow } from "../model/teleport";
 import type {
@@ -32,7 +32,7 @@ import type {
 import { createTeleportBridge } from "../native/teleport";
 import { telemetryBridge, type TelemetryBridge } from "../native/telemetry";
 import { PresenceOverlay } from "./presence/PresenceOverlay";
-import { MediaSession, type MediaStatus, type MediaTicket, type SessionOpenedPayload } from "@cua/spacesd-html5/core/mediaSession";
+import { MediaSession, type InteractiveInputAcknowledgement, type MediaStatus, type MediaTicket, type SessionOpenedPayload } from "@cua/spacesd-html5/core/mediaSession";
 
 export { applyCursorShape, cursorShapeToCss } from "./cursorShape";
 
@@ -81,11 +81,19 @@ export interface MediaCanvasProps {
   interactive: boolean;
   audio: boolean;
   className?: string;
+  style?: CSSProperties;
+  label?: string;
   onStatus?: (status: MediaStatus, detail?: string) => void;
   onGeometry?: (width: number, height: number) => void;
   onOpened?: (opened: SessionOpenedPayload) => void;
   onTitle?: (title: string) => void;
   onGone?: (reason: string) => void;
+  onServerError?: (payload: Record<string, unknown>) => void;
+  onInputAcknowledgement?: (result: InteractiveInputAcknowledgement) => void;
+  onFrame?: (width: number, height: number) => void;
+  /** The last rendered canvas, before teardown (for a disconnected preview). */
+  onLastFrame?: (canvas: HTMLCanvasElement) => void;
+  onStopped?: (sessionId: string) => void;
   /** Receives the live session (for geometry sync), or null on teardown. */
   sessionRef?: (session: MediaSession | null) => void;
   /** Bump to force a fresh attach (user "Retry"). */
@@ -111,7 +119,10 @@ export function MediaCanvas(props: MediaCanvasProps) {
     let height = 0;
     const cb = () => latest.current;
     const start = (ticket: MediaTicket) => {
-      if (cancelled) return;
+      if (cancelled) {
+        if (ticket.mediaSessionId) cb().onStopped?.(ticket.mediaSessionId);
+        return;
+      }
       startedAt = performance.now();
       session = new MediaSession({
         canvas,
@@ -127,6 +138,9 @@ export function MediaCanvas(props: MediaCanvasProps) {
         onOpened: (o) => cb().onOpened?.(o),
         onTitle: (t) => cb().onTitle?.(t),
         onGone: (r) => cb().onGone?.(r),
+        onServerError: (p) => cb().onServerError?.(p),
+        onInputAcknowledgement: (r) => cb().onInputAcknowledgement?.(r),
+        onFrame: (w, h) => cb().onFrame?.(w, h),
       });
       cb().sessionRef?.(session);
       session.start();
@@ -147,6 +161,7 @@ export function MediaCanvas(props: MediaCanvasProps) {
       cancelled = true;
       if (session) {
         const stats = session.stats;
+        if (stats.framesDecoded > 0) cb().onLastFrame?.(canvas);
         (cb().telemetry ?? telemetryBridge()).recordStream({
           codec: stats.codec,
           frames: stats.framesReceived,
@@ -154,14 +169,16 @@ export function MediaCanvas(props: MediaCanvasProps) {
           durationMs: performance.now() - startedAt,
         });
       }
+      const sessionId = session?.id;
       session?.stop();
+      if (sessionId) cb().onStopped?.(sessionId);
       cb().sessionRef?.(null);
     };
     // The ticket source and interactivity define the session; callbacks are read live.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.ticket?.wsUrl, props.open, props.interactive, props.audio, props.generation]);
 
-  return <canvas ref={canvasRef} className={props.className ?? "ws-frame-canvas"} tabIndex={0} />;
+  return <canvas ref={canvasRef} className={props.className ?? "ws-frame-canvas"} style={props.style} aria-label={props.label} tabIndex={0} />;
 }
 
 // ---------------------------------------------------------------- WindowStream
@@ -216,11 +233,28 @@ async function currentWindow() {
   return getCurrentWindow();
 }
 
+function StreamFailureNotice({ inputError, serverError, onDismiss }: {
+  inputError: string | null;
+  serverError: string | null;
+  onDismiss: () => void;
+}) {
+  if (!inputError && !serverError) return null;
+  return <div className="window-stream-notice" role="alert">
+    <div>
+      {inputError && <p>Input delivery failed. {inputError}</p>}
+      {serverError && <p>A stream operation failed. {serverError}</p>}
+    </div>
+    <button type="button" className="ghost-button" onClick={onDismiss}>Dismiss</button>
+  </div>;
+}
+
 function SingleWindowStream({ fleet, config }: { fleet: FleetBridge; config: ViewerConfig }) {
   const target = config.targetWindow!;
   const space = config.space;
   const [status, setStatus] = useState<MediaStatus>("connecting");
   const [detail, setDetail] = useState<string | undefined>(undefined);
+  const [inputError, setInputError] = useState<string | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
   const sessionRef = useRef<MediaSession | null>(null);
   // Anti-feedback: the size we last applied/observed, and a guard while a
@@ -307,8 +341,14 @@ function SingleWindowStream({ fleet, config }: { fleet: FleetBridge; config: Vie
             onStatus={(s, d) => {
               setStatus(s);
               setDetail(d);
+              if (s === "connecting" || s === "reconnecting") {
+                setInputError(null);
+                setServerError(null);
+              }
             }}
             onOpened={(opened) => {
+              setInputError(null);
+              setServerError(null);
               const scale = opened.geometry?.scale_factor ?? 1;
               if (opened.geometry) sizeHostTo(opened.geometry.width_px, opened.geometry.height_px, scale);
               console.info(`[Cua Spaces] stream window attached to media session ${opened.session_id}`);
@@ -327,6 +367,17 @@ function SingleWindowStream({ fleet, config }: { fleet: FleetBridge; config: Vie
               const scale = sessionRef.current?.sessionOpened?.geometry?.scale_factor ?? 1;
               sizeHostTo(w, h, scale);
             }}
+            onServerError={(error) => {
+              setServerError(`${String(error.code ?? "stream_error")}: ${String(error.message ?? "The server did not provide a reason.")}`);
+            }}
+            onInputAcknowledgement={(result) => {
+              if (!result.delivered) {
+                setInputError(`${result.error?.code ?? "delivery_failed"}: ${result.error?.message ?? "The server did not provide a reason."}`);
+              }
+              // Later accepted input does not undo an earlier failed event or
+              // prove that the remote app changed. Keep the refusal visible
+              // until dismissed or a new session starts.
+            }}
             onGone={() => {
               // The dedicated remote window closed: close this OS window too.
               void currentWindow()
@@ -337,6 +388,10 @@ function SingleWindowStream({ fleet, config }: { fleet: FleetBridge; config: Vie
           <PresenceOverlay spaceId={space.id} windowId={target.id} interactive={!replica} live={status === "streaming"} />
         </div>
       </div>
+      <StreamFailureNotice inputError={inputError} serverError={serverError} onDismiss={() => {
+        setInputError(null);
+        setServerError(null);
+      }} />
       {status !== "streaming" && (
         <div className="window-stream-status">
           {status === "failed" || status === "ended" ? (
@@ -442,6 +497,8 @@ function WindowPanel({
   const [pos, setPos] = useState({ x: 30 + ((index * 40) % 300), y: 24 + ((index * 36) % 220) });
   const [title, setTitle] = useState(win.title);
   const [badge, setBadge] = useState("");
+  const [inputError, setInputError] = useState<string | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
   const [closed, setClosed] = useState(false);
   const [z, setZ] = useState(1);
   const sessionRef = useRef<MediaSession | null>(null);
@@ -492,10 +549,32 @@ function WindowPanel({
           sessionRef.current = s;
         }}
         onTitle={setTitle}
-        onStatus={(s) => setBadge(s === "streaming" ? "" : s)}
+        onStatus={(s) => {
+          setBadge(s === "streaming" ? "" : s);
+          if (s === "connecting" || s === "reconnecting") {
+            setInputError(null);
+            setServerError(null);
+          }
+        }}
+        onOpened={() => {
+          setInputError(null);
+          setServerError(null);
+        }}
+        onServerError={(error) => {
+          setServerError(`${String(error.code ?? "stream_error")}: ${String(error.message ?? "The server did not provide a reason.")}`);
+        }}
+        onInputAcknowledgement={(result) => {
+          if (!result.delivered) {
+            setInputError(`${result.error?.code ?? "delivery_failed"}: ${result.error?.message ?? "The server did not provide a reason."}`);
+          }
+        }}
         onGone={() => setClosed(true)}
       />
       <PresenceOverlay spaceId={spaceId} windowId={win.id} interactive live={!badge} />
+      <StreamFailureNotice inputError={inputError} serverError={serverError} onDismiss={() => {
+        setInputError(null);
+        setServerError(null);
+      }} />
     </div>
   );
 }

@@ -7,7 +7,7 @@
 //! account's relay.
 //!
 //! Sharing hands the Space to someone else, so [`AppShareConsent`] asks for
-//! presence on macOS (Touch ID or the login password). Elsewhere the Share
+//! native presence on macOS and Windows. Elsewhere the Share
 //! button the person just pressed in this app is the confirmation: this
 //! runtime is not reachable by agents (they use the daemon, which asks for
 //! presence itself).
@@ -21,7 +21,7 @@ pub struct AppShareConsent;
 
 impl ShareConsent for AppShareConsent {
     fn confirm(&self, reason: &str) -> Result<(), String> {
-        if cfg!(target_os = "macos") {
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
             crate::biometric::authorize(reason)
         } else {
             Ok(())

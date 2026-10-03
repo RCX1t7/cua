@@ -1223,10 +1223,89 @@ impl InteractiveInputProvider for CuaInteractiveInputProvider {
             Ok(Some(Arc::new(driver_input::MacosLease(session))))
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(target_os = "windows")]
         {
-            // cua-driver has no Windows interactive session yet; one-shot
-            // actions go through its tools (desktop scope for a display).
+            use platform_windows::input::{InteractiveInputConfig, InteractiveInputSession};
+            let config = if let Some(display_id) = display_key(target) {
+                let display = windows_display::displays()
+                    .into_iter()
+                    .find(|display| display.id == display_id)
+                    .ok_or_else(|| {
+                        ProviderError::new(ProviderErrorCode::TargetUnavailable, "display is gone")
+                    })?;
+                let (x, y, _, _) = display.bounds;
+                InteractiveInputConfig {
+                    window: None,
+                    region: Some((
+                        (x * display.scale_factor).round() as i32,
+                        (y * display.scale_factor).round() as i32,
+                        display.native_width_px,
+                        display.native_height_px,
+                    )),
+                    delivery_mode,
+                }
+            } else {
+                let native = self.0.native(target)?;
+                let pid = u32::try_from(native.pid).map_err(|_| {
+                    ProviderError::new(
+                        ProviderErrorCode::TargetUnavailable,
+                        "native process identifier is outside the Windows range",
+                    )
+                })?;
+                InteractiveInputConfig {
+                    window: Some((pid, native.window_id)),
+                    region: None,
+                    delivery_mode,
+                }
+            };
+            let expected = config.window;
+            let expected_region = config.region;
+            let inner = self.0.clone();
+            let target = target.clone();
+            let validate = Box::new(move || {
+                if let Some((pid, window_id)) = expected {
+                    let current = inner.native(&target)?;
+                    if current.pid != i64::from(pid) || current.window_id != window_id {
+                        return Err(ProviderError::new(
+                            ProviderErrorCode::TargetUnavailable,
+                            "window identity changed",
+                        ));
+                    }
+                } else if let Some(display_id) = display_key(&target) {
+                    let display = windows_display::displays()
+                        .into_iter()
+                        .find(|display| display.id == display_id)
+                        .ok_or_else(|| {
+                            ProviderError::new(
+                                ProviderErrorCode::TargetUnavailable,
+                                "display is gone",
+                            )
+                        })?;
+                    let region = Some((
+                        (display.bounds.0 * display.scale_factor).round() as i32,
+                        (display.bounds.1 * display.scale_factor).round() as i32,
+                        display.native_width_px,
+                        display.native_height_px,
+                    ));
+                    if region != expected_region {
+                        return Err(ProviderError::new(
+                            ProviderErrorCode::StaleTarget,
+                            "display geometry changed; reopen the stream",
+                        ));
+                    }
+                }
+                Ok(())
+            });
+            let session =
+                InteractiveInputSession::open(config).map_err(driver_input::interactive_error)?;
+            Ok(Some(Arc::new(driver_input::WindowsLease {
+                session,
+                validate,
+            })))
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        {
             let _ = delivery_mode;
             if display_key(target).is_none() {
                 self.0.native(target)?;

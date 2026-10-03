@@ -43,6 +43,9 @@ async function pickSurface(): Promise<React.ReactElement> {
       document.documentElement.classList.add("is-main");
       // Which experiments are on (the day's `cua_app_active` carries them).
       declareExperiments();
+      void import("./native/updater").then(({ checkForUpdateSilently }) =>
+        checkForUpdateSilently(),
+      );
       return <MainWindow />;
     }
     if (label.startsWith("teleport-picker")) {
@@ -61,13 +64,6 @@ async function pickSurface(): Promise<React.ReactElement> {
     // In a plain browser (design work), paint a stand-in wallpaper behind the
     // notch panel. Inside Tauri the portal page stays transparent around it.
     document.documentElement.classList.add("is-browser");
-  }
-  if (hasTauri()) {
-    // Only the portal reaches this point; kick off a background auto-update
-    // check so long-lived installs pick up new releases without user action.
-    void import("./native/updater").then(({ checkForUpdateSilently }) =>
-      checkForUpdateSilently(),
-    );
   }
   return <App bridge={createBridge()} />;
 }

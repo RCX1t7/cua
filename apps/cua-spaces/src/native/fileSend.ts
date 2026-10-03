@@ -26,12 +26,42 @@ export interface SentFile {
   sha256: string;
 }
 
+/** Completion of selected host items, not an estimate of bytes in flight.
+ * A folder can yield several verified files (or none when empty/ignored). */
+export interface FileSendProgress {
+  completedItems: number;
+  totalItems: number;
+  currentPath: string | null;
+  files: SentFile[];
+}
+
+export class FileSendFailure extends Error {
+  readonly progress: FileSendProgress;
+  readonly remainingPaths: string[];
+
+  constructor(error: unknown, progress: FileSendProgress, remainingPaths: string[]) {
+    super(error instanceof Error ? error.message : String(error));
+    this.name = "FileSendFailure";
+    this.progress = progress;
+    this.remainingPaths = remainingPaths;
+  }
+}
+
 export interface FileSendBridge {
   readonly isNative: boolean;
   /** Native open panel; resolves to the chosen host paths ([] if cancelled). */
   pickFiles(): Promise<string[]>;
+  /** Windows' native dialog uses a separate folder-selection mode. */
+  pickFolders?(): Promise<string[]>;
   /** Send host files to the Space's ~/Downloads. Rejects unless all landed. */
   sendFiles(spaceId: string, paths: string[]): Promise<SentFile[]>;
+  /** Optional for older bridge implementations; advances only after the
+   * existing native command verifies that selected item in the Space. */
+  sendFilesWithProgress?(
+    spaceId: string,
+    paths: string[],
+    onProgress: (progress: FileSendProgress) => void,
+  ): Promise<SentFile[]>;
 }
 
 export function createFallbackFileSendBridge(): FileSendBridge {
@@ -45,19 +75,43 @@ export function createTauriFileSendBridge(): FileSendBridge {
   const core = import("@tauri-apps/api/core");
   const invoke = async <T>(command: string, args?: Record<string, unknown>) =>
     (await core).invoke<T>(command, args);
+  const pick = async (directory: boolean): Promise<string[]> => {
+    const chosen = await invoke<string[] | string | null>("plugin:dialog|open", {
+      options: { multiple: true, directory, title: directory ? "Send folders" : "Teleport" },
+    });
+    if (!chosen) return [];
+    return Array.isArray(chosen) ? chosen : [chosen];
+  };
+  const send = async (
+    spaceId: string,
+    paths: string[],
+    onProgress?: (progress: FileSendProgress) => void,
+  ): Promise<SentFile[]> => {
+    if (!paths.length) throw new Error("nothing to send");
+    const files: SentFile[] = [];
+    for (let index = 0; index < paths.length; index++) {
+      const progress = (): FileSendProgress => ({
+        completedItems: index, totalItems: paths.length, currentPath: paths[index] ?? null, files: [...files],
+      });
+      onProgress?.(progress());
+      try {
+        const landed = await invoke<SentFile[]>("send_files_to_space", { spaceId, paths: [paths[index]] });
+        files.push(...landed);
+      } catch (error) {
+        // Earlier commands committed and verified their files. Never discard
+        // those receipts or automatically resend them after a later failure.
+        throw new FileSendFailure(error, progress(), paths.slice(index));
+      }
+      onProgress?.({ completedItems: index + 1, totalItems: paths.length, currentPath: null, files: [...files] });
+    }
+    return files;
+  };
   return {
     isNative: true,
-    pickFiles: async () => {
-      // The dialog plugin's own IPC command, called directly so the pop-out
-      // does not pull in a second copy of its JS wrapper.
-      const chosen = await invoke<string[] | string | null>("plugin:dialog|open", {
-        options: { multiple: true, directory: false, title: "Teleport" },
-      });
-      if (!chosen) return [];
-      return Array.isArray(chosen) ? chosen : [chosen];
-    },
-    sendFiles: (spaceId, paths) =>
-      invoke<SentFile[]>("send_files_to_space", { spaceId, paths }),
+    pickFiles: () => pick(false),
+    pickFolders: () => pick(true),
+    sendFiles: send,
+    sendFilesWithProgress: send,
   };
 }
 

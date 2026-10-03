@@ -72,6 +72,7 @@ impl InputActivity {
             principal: principal.to_owned(),
             position: None,
             done: false,
+            admitted: false,
         }
     }
 
@@ -114,6 +115,7 @@ pub struct Announced {
     principal: String,
     position: Option<(f64, f64)>,
     done: bool,
+    admitted: bool,
 }
 
 impl Announced {
@@ -124,17 +126,46 @@ impl Announced {
     }
 
     /// Wait for the pointer lock (async paths).
-    pub async fn acquire(self) -> InputGuard {
+    pub async fn acquire(mut self) -> InputGuard {
         let guard = self.activity.lock.clone().lock_owned().await;
+        self.admitted = true;
         InputGuard {
             announced: self,
             _guard: guard,
         }
     }
 
+    /// Bound admission only. The current owner is never timed out or unlocked.
+    /// Dropping the waiting lock future prevents a refused call running later.
+    pub async fn acquire_for(mut self, budget: Duration) -> Result<InputGuard, ()> {
+        let lock = self.activity.lock.clone();
+        match tokio::time::timeout(budget, lock.lock_owned()).await {
+            Ok(guard) => {
+                self.admitted = true;
+                Ok(InputGuard {
+                    announced: self,
+                    _guard: guard,
+                })
+            }
+            Err(_) => {
+                self.cancel();
+                Err(())
+            }
+        }
+    }
+
+    /// An event refused before native dispatch does not become pointer owner.
+    pub fn cancel(mut self) {
+        if !self.done {
+            self.done = true;
+            self.activity.pending.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
     /// Wait for the pointer lock from a blocking thread.
-    pub fn acquire_blocking(self) -> InputGuard {
+    pub fn acquire_blocking(mut self) -> InputGuard {
         let guard = self.activity.lock.clone().blocking_lock_owned();
+        self.admitted = true;
         InputGuard {
             announced: self,
             _guard: guard,
@@ -146,7 +177,9 @@ impl Announced {
             return;
         }
         self.done = true;
-        self.activity.note(&self.principal, self.position);
+        if self.admitted {
+            self.activity.note(&self.principal, self.position);
+        }
         self.activity.pending.fetch_sub(1, Ordering::SeqCst);
     }
 }
@@ -165,6 +198,17 @@ pub struct InputGuard {
 }
 
 impl InputGuard {
+    /// Release an admitted event that has not entered native dispatch.
+    pub fn cancel(mut self) {
+        if !self.announced.done {
+            self.announced.done = true;
+            self.announced
+                .activity
+                .pending
+                .fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
     /// Correct the recorded end position (known only after injecting).
     pub fn set_position(&mut self, position: Option<(f64, f64)>) {
         self.announced.position = position;

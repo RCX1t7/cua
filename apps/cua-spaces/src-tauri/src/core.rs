@@ -147,6 +147,7 @@ pub fn cua_home() -> PathBuf {
 /// The `cua` binary: `$CUA_BIN`, a `cua` next to the app executable
 /// (bundled sidecar), then `cua` on `PATH`.
 pub fn find_cua_bin() -> Option<PathBuf> {
+    let binary_name = if cfg!(windows) { "cua.exe" } else { "cua" };
     if let Some(p) = non_empty_env("CUA_BIN").map(PathBuf::from) {
         if p.is_file() {
             return Some(p);
@@ -156,14 +157,14 @@ pub fn find_cua_bin() -> Option<PathBuf> {
         .ok()
         .and_then(|e| e.parent().map(Path::to_path_buf))
     {
-        let sidecar = dir.join("cua");
+        let sidecar = dir.join(binary_name);
         if sidecar.is_file() {
             return Some(sidecar);
         }
     }
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
-        .map(|d| d.join("cua"))
+        .map(|d| d.join(binary_name))
         .find(|p| p.is_file())
 }
 
@@ -1290,10 +1291,21 @@ impl AppCore {
         let rows = futures_util::future::join_all(infos.into_iter().map(|info| {
             let spaces = spaces.clone();
             async move {
-                match tokio::time::timeout(LIST_PROBE, spaces.space(&info.id)).await {
+                // `space` may return a cached client. A saved registry entry
+                // and a previous handshake do not prove that it still answers.
+                let probe = async {
+                    let space = spaces.space(&info.id).await.map_err(msg)?;
+                    if space.has_spacesd() {
+                        space.spacesd().map_err(msg)?.health().await.map_err(msg)?;
+                    }
+                    // Plain MCP Spaces have no SystemService; retain their
+                    // existing connection path rather than issuing an env RPC.
+                    Ok::<Space, String>(space)
+                };
+                match tokio::time::timeout(LIST_PROBE, probe).await {
                     Ok(Ok(space)) => SpaceRow::connected(info, &space),
                     Ok(Err(e)) => SpaceRow {
-                        error: Some(e.to_string()),
+                        error: Some(e),
                         ..SpaceRow::from_info(info)
                     },
                     Err(_) => SpaceRow {

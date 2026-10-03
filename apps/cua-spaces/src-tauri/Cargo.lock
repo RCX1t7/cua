@@ -1391,6 +1391,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "windows 0.62.2",
  "zeroize",
 ]
 
@@ -1539,6 +1540,7 @@ dependencies = [
  "cua-fleet",
  "cua-host",
  "cua-keyvault",
+ "cua-media-protocol",
  "cua-proto",
  "cua-sandbox-core",
  "cua-spaces",
@@ -1569,6 +1571,8 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "windows 0.61.3",
+ "windows-future 0.2.1",
 ]
 
 [[package]]

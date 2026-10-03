@@ -30,6 +30,8 @@ pub(crate) mod testing;
 pub mod window;
 #[cfg(target_os = "macos")]
 mod window_macos;
+#[cfg(target_os = "windows")]
+mod window_windows;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

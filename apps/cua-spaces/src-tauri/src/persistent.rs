@@ -138,8 +138,8 @@ pub fn reveal_target(
 }
 
 /// Shows `target` in the file manager: selected in Finder (`open -R`), or
-/// its folder on Linux (`xdg-open`). One argv, no shell.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+/// its folder on Linux (`xdg-open`) and Windows (Explorer). One argv, no shell.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn show_in_file_manager(target: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut command = {
@@ -158,13 +158,39 @@ fn show_in_file_manager(target: &Path) -> Result<(), String> {
         c.arg(folder);
         c
     };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        // Never run a file's associated program: reveal its containing folder.
+        // drive_reveal has already resolved and checked containment, including
+        // junctions. Explorer wants normal DOS/UNC paths, not canonicalize's
+        // extended-length prefix. Refuse an unrepresentable path rather than
+        // lossy conversion that could open a different location.
+        let folder = if target.is_dir() {
+            target
+        } else {
+            target.parent().unwrap_or(target)
+        };
+        let folder = folder
+            .to_str()
+            .ok_or_else(|| "Explorer cannot represent this folder path".to_string())?;
+        let folder = if let Some(unc) = folder.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{unc}")
+        } else {
+            folder.strip_prefix(r"\\?\").unwrap_or(folder).to_string()
+        };
+        let windows = std::env::var_os("SystemRoot")
+            .ok_or_else(|| "Windows system directory is unavailable".to_string())?;
+        let mut c = std::process::Command::new(PathBuf::from(windows).join("explorer.exe"));
+        c.arg(folder);
+        c
+    };
     command
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("could not show {}: {e}", target.display()))
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn show_in_file_manager(_target: &Path) -> Result<(), String> {
     Err("Cua Volume does not mount on this system".into())
 }

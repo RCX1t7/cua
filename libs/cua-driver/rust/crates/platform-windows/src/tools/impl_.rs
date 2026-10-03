@@ -9375,8 +9375,8 @@ impl Tool for BringToFrontTool {
                 `bring_to_front` only for a focus-proxy surface that must remain foreground \
                 across multiple calls, such as an RDP or Windows App session, or when repeated \
                 action-scoped activation prevents the remote surface from accepting input. \n\n\
-                Implementation uses the `AttachThreadInput` trick to bypass Windows' \
-                foreground-lock when the daemon is not at UIAccess integrity. Returns \
+                Implementation requests foreground without attaching input queues and verifies \
+                the exact HWND and owning PID; foreground-lock denial is reported. Returns \
                 structured `{previous_fg_hwnd, now_fg_hwnd}` so callers can later restore. \
                 Windows only; macOS / Linux return an error pointing at platform-native \
                 alternatives.".into(),
@@ -9418,18 +9418,14 @@ impl Tool for BringToFrontTool {
             }
         };
 
-        // Run the foreground swap on a blocking thread. The AttachThreadInput
-        // trick mirrors `send_key_synthesized` (input/keyboard.rs:313-345)
-        // and is validated by `flash-repro/16-edge-launch-fg.ps1` for the
-        // Edge launch focus-steal recovery case.
+        // Activation is requested without joining another GUI input queue.
+        // Verify the exact HWND/PID before and after the bounded confirmation;
+        // do not make a synchronous z-order/style call to a foreign GUI thread.
         let outcome =
             tokio::task::spawn_blocking(move || -> Result<(u64, u64, bool, bool), String> {
                 use windows::Win32::Foundation::HWND;
-                use windows::Win32::Graphics::Dwm::DwmFlush;
                 use windows::Win32::UI::WindowsAndMessaging::{
-                    GetForegroundWindow, IsIconic, IsWindow, SetWindowPos, ShowWindowAsync,
-                    HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-                    SW_RESTORE,
+                    GetForegroundWindow, IsIconic, IsWindow, ShowWindowAsync, SW_RESTORE,
                 };
 
                 let target = HWND(hwnd as *mut _);
@@ -9437,6 +9433,9 @@ impl Tool for BringToFrontTool {
                     return Err(format!("hwnd 0x{hwnd:x} is not a valid window"));
                 }
 
+                if crate::win32::window_owner_pid(hwnd) != Some(pid) {
+                    return Err("exact target HWND does not belong to the requested PID".into());
+                }
                 let prev_fg = unsafe { GetForegroundWindow() };
                 let prev_fg_addr = prev_fg.0 as u64;
 
@@ -9459,48 +9458,17 @@ impl Tool for BringToFrontTool {
                     }
                 }
 
-                // Lock-free z-order raise FIRST: bring the window to the top of the
-                // normal band (the HWND_TOPMOST→HWND_NOTOPMOST force-to-front trick)
-                // so it's brought to the VISIBLE front even when the foreground-lock
-                // denies focus. SWP_NOACTIVATE → no focus steal; SetWindowPos z-order
-                // is not gated by the foreground-lock / UIAccess. This is the same
-                // technique the delivery_mode:"foreground" pointer path uses.
-                let raised = unsafe {
-                    let a = SetWindowPos(
-                        target,
-                        HWND_TOPMOST,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
-                    )
-                    .is_ok();
-                    let b = SetWindowPos(
-                        target,
-                        HWND_NOTOPMOST,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
-                    )
-                    .is_ok();
-                    a && b
-                };
-
                 // The caller explicitly requested a visible transition, so the
                 // shared foreground helper may claim the most-recent-input token.
                 let _ = unsafe { crate::input::force_foreground_assisted(target) };
                 let now_fg = unsafe { GetForegroundWindow() };
 
-                // A restored HWND can stop reporting iconic before its compositor
-                // surface is painted. Flush DWM before returning, but do not make
-                // the restore operation depend on any particular capture backend.
-                // Capture has its own WGC fallback for freshly restored surfaces.
-                if was_minimized {
-                    let _ = unsafe { DwmFlush() };
+                if crate::win32::window_owner_pid(hwnd) != Some(pid) {
+                    return Err("target HWND ownership changed during activation".into());
                 }
+                // Foreground confirmation proves the visible raise. A queued
+                // z-order request alone would not prove that any pixels changed.
+                let raised = now_fg == target;
                 Ok((prev_fg_addr, now_fg.0 as u64, raised, was_minimized))
             })
             .await;
@@ -9510,15 +9478,10 @@ impl Tool for BringToFrontTool {
                 let focused = now == hwnd;
                 let msg = if focused {
                     format!("✅ bring_to_front: pid {pid} hwnd 0x{hwnd:x} is now foreground (was 0x{prev:x}).")
-                } else if raised {
-                    format!(
-                        "bring_to_front: exact target hwnd 0x{hwnd:x} was raised in z-order, but \
-                         Windows kept foreground on hwnd 0x{now:x}; foreground activation failed."
-                    )
                 } else {
                     format!(
-                        "bring_to_front could neither focus nor raise target 0x{hwnd:x} (current \
-                         foreground 0x{now:x})."
+                        "bring_to_front: Windows did not confirm foreground activation for \
+                         exact target 0x{hwnd:x} (current foreground 0x{now:x})."
                     )
                 };
                 let structured = if focused {

@@ -21,6 +21,8 @@ import {
 } from "@trycua/cua/teleport";
 
 import { hasTauri } from "./bridge";
+import { createTauriKeyvaultBridge } from "./keyvault";
+import type { ReviewConsent, TeleportReviewHost } from "../model/teleportReview";
 
 type Json = Record<string, unknown>;
 
@@ -35,7 +37,7 @@ export interface DropView {
 export interface TeleportAppsBridge {
   readonly isNative: boolean;
   /** The picker host for one Space. */
-  host(spaceId: string): TeleportHost;
+  host(spaceId: string): TeleportReviewHost;
   /** The catalog row for a dropped app bundle. */
   entryForPath(path: string): Promise<CatalogEntry>;
   /** Sorts dropped paths into apps, files and URLs. */
@@ -126,6 +128,7 @@ export function createTauriTeleportAppsBridge(): TeleportAppsBridge {
   return {
     isNative: true,
     host: (spaceId) => ({
+      keyvault: createTauriKeyvaultBridge(),
       catalog: async () => (await invoke<Json[]>("teleport_catalog", { spaceId })).map(entryFromCore),
       plan: async (entry, options) =>
         planFromCore(
@@ -143,6 +146,7 @@ export function createTauriTeleportAppsBridge(): TeleportAppsBridge {
           }),
         ),
       run: async (plan, consent, onEvent) => {
+        const reviewed = consent as ReviewConsent;
         const { Channel } = await core;
         const channel = new Channel<Json>();
         channel.onmessage = (e) => onEvent(runEventFromCore(e));
@@ -155,6 +159,10 @@ export function createTauriTeleportAppsBridge(): TeleportAppsBridge {
               acknowledge_sensitive: consent.acknowledgeSensitive,
               save_to_keyvault: consent.saveToKeyvault,
               acknowledge_relay_plaintext: consent.acknowledgeRelayPlaintext,
+              ...(reviewed.cookieDomains !== undefined ? { cookie_domains: reviewed.cookieDomains } : {}),
+              exclude: reviewed.exclude ?? [],
+              ...(reviewed.fromVault !== undefined ? { from_vault: reviewed.fromVault } : {}),
+              include_passwords: reviewed.includePasswords ?? false,
             },
             onEvent: channel,
           }),

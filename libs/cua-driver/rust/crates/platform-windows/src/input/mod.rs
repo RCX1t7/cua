@@ -11,8 +11,11 @@
 
 pub mod delivery;
 pub mod inject;
+pub mod interactive;
 pub mod keyboard;
 pub mod mouse;
+
+pub use interactive::{InteractiveInputConfig, InteractiveInputSession};
 
 pub(crate) use inject::{force_foreground_assisted, force_foreground_attached};
 pub use inject::{

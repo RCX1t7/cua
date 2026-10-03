@@ -121,7 +121,12 @@ export function InstallerFlow({
   // Settings, Experiments decide the pages (Cua Volume's only with it on).
   const [state, setState] = useState<OnboardingState>(() =>
     reduceOnboarding(
-      { ...initialOnboarding(installerMode ?? null, initialIdentity ?? null), step: initialStep },
+      {
+        ...initialOnboarding(installerMode ?? null, initialIdentity ?? null),
+        step: initialStep,
+        // Windows startup registration is an explicit opt-in on Done.
+        ...((osProp ?? hostOs()) === "windows" ? { launchAtLogin: false } : {}),
+      },
       { type: "experiments-loaded", experiments: currentExperiments() },
     ),
   );
@@ -175,7 +180,7 @@ export function InstallerFlow({
   const finish = () => {
     telemetry.recordSignals(onboardingFinishedSignals(state));
     if (loginItem.isNative) {
-      const on = state.launchAtLogin ?? true;
+      const on = state.launchAtLogin ?? (os !== "windows");
       writeLaunchChoice(on);
       void loginItem.set(on).catch(() => {});
     }
@@ -280,10 +285,11 @@ export function InstallerFlow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.driveRequest, drive]);
 
-  // First launch installs the bundled `cua` silently (no page): onto the
-  // plan's target, adding its bin dir to the shell profile when it is not
-  // on PATH. Done shows where it went.
+  // Windows runs the bundled CLI directly; opening the client must not
+  // copy a CLI or edit the account's PATH. Other platforms retain the
+  // upstream first-run CLI installation.
   useEffect(() => {
+    if ((osProp ?? hostOs()) === "windows") return;
     let cancelled = false;
     void installer
       .cliPlan()
@@ -938,7 +944,7 @@ function AgentsStep({
           <button type="button" className="primary-button" data-owns-enter onClick={() => setAttempt((n) => n + 1)}>
             {copy.tryAgain}
           </button>
-        ) : installed.length > 0 ? (
+        ) : installed.length > 0 || (!report && !error) ? (
           <button type="button" className="primary-button" data-owns-enter disabled={!canSetup} onClick={setup}>
             {busy ? copy.agentsSettingUp : copy.agentsSetUp}
           </button>

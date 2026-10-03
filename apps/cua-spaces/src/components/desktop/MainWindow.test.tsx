@@ -75,11 +75,15 @@ describe("MainWindow", () => {
     expect(host.querySelector('[data-os-icon="os-macos"]')).not.toBeNull();
   });
 
-  it("shows the selected Space's detail and live preview", async () => {
-    setup();
+  it("shows the selected Space's detail and opens its interactive desktop stream", async () => {
+    const openStream = vi.fn(async () => { throw new Error("The desktop is temporarily unavailable."); });
+    setup({ listSpaces: async () => ROWS.map((row) => ({ ...row, features: ["desktop_stream"] })), openStream });
     fireEvent.click(await screen.findByRole("option", { name: /Aurora/ }));
     expect(await screen.findByRole("heading", { level: 1, name: "Aurora" })).toBeInTheDocument();
-    expect(await screen.findByAltText("Aurora desktop")).toHaveAttribute("src", "data:image/png;base64,AAAA");
+    expect(await screen.findByLabelText("Aurora interactive desktop")).toBeInTheDocument();
+    await waitFor(() => expect(openStream).toHaveBeenCalledWith("cloud:aurora", { kind: "display" }, { audio: true, policy: "allow_activation" }));
+    expect(await screen.findByText("The desktop is temporarily unavailable.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
     // The facts are the core's: no Location row (the sidebar section says where it runs).
     expect(screen.getByLabelText("Details")).toHaveTextContent("cloud:aurora");
     expect(screen.getByLabelText("Details")).not.toHaveTextContent("Cua Cloud");

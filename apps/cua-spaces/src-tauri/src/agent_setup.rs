@@ -101,10 +101,32 @@ fn server(setup: &AgentSetup) -> McpServer {
     }
 }
 
+/// Explicit debug GUI runs keep every agent writer in an existing scratch home.
+/// This changes configuration destinations only; native account verification
+/// and broker authority checks are unaffected.
+pub(crate) fn setup_for_app() -> Result<AgentSetup, String> {
+    #[cfg(all(target_os = "windows", debug_assertions))]
+    if let Some(value) = std::env::var_os("CUA_SPACES_APP_E2E_AGENT_HOME") {
+        let path = std::path::PathBuf::from(value)
+            .canonicalize()
+            .map_err(|_| "E2E agent home must already exist".to_string())?;
+        let explicit_home = std::env::var_os("CUA_HOME")
+            .ok_or("E2E agent isolation requires an explicit CUA_HOME")?;
+        let root = std::path::PathBuf::from(explicit_home)
+            .canonicalize()
+            .map_err(|_| "E2E CUA_HOME must already exist".to_string())?;
+        if path == root || !path.starts_with(&root) {
+            return Err("E2E agent home must be contained below CUA_HOME".into());
+        }
+        return Ok(AgentSetup::new(cua_agent_setup::HostEnv::isolated(path)));
+    }
+    Ok(AgentSetup::from_env())
+}
+
 async fn blocking<T: Send + 'static>(
     f: impl FnOnce(AgentSetup) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
-    tauri::async_runtime::spawn_blocking(move || f(AgentSetup::from_env()))
+    tauri::async_runtime::spawn_blocking(move || setup_for_app().and_then(f))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -129,6 +151,25 @@ pub async fn agent_setup_configure(agents: Option<Vec<String>>) -> Result<Vec<Ag
 #[tauri::command]
 pub async fn agent_setup_remove(agents: Vec<String>) -> Result<Vec<AgentRow>, String> {
     blocking(move |s| remove(&s, agents)).await
+}
+
+/// Refresh only integrations recorded as managed by Cua, preserving user edits.
+#[tauri::command]
+pub async fn agent_setup_update() -> Result<(), String> {
+    blocking(|s| {
+        let outcomes = s.update(Some(&server(&s))).map_err(|e| e.to_string())?;
+        let failures: Vec<_> = outcomes
+            .iter()
+            .filter(|o| o.change == Change::Failed)
+            .map(|o| o.detail.as_str())
+            .collect();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("; "))
+        }
+    })
+    .await
 }
 
 #[cfg(test)]

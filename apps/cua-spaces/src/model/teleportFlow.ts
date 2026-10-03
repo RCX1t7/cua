@@ -17,12 +17,14 @@ import type {
 } from "@trycua/cua/teleport";
 
 import { core } from "../core";
+import { pickerConsent, type ReviewEvent } from "./teleportReview";
 
 export type { PickerState };
 
 /** The core's picker events (a failure carries its cause's strings). */
 export type PickerEvent =
   | Exclude<SdkPickerEvent, { type: "failed" }>
+  | ReviewEvent
   | { type: "failed"; message: string; causeTexts?: string[]; causeInstalled?: boolean };
 
 /** Strings a failure's cause carries (code, message, detail), for the
@@ -178,12 +180,7 @@ export class TeleportPickerController {
     const s = this.#state;
     if (s.step !== "consent" || !canConfirm(s) || !s.plan) return;
     const plan = s.plan;
-    const consent = core<{
-      approved: boolean;
-      acknowledgeSensitive: boolean;
-      saveToKeyvault: boolean;
-      acknowledgeRelayPlaintext: boolean;
-    }>("flow.consent", { state: s });
+    const consent = pickerConsent(s);
     this.dispatch({ type: "confirm" });
     try {
       const report = await this.host.run(plan, consent, (event) => this.dispatch({ type: "progress", event }));

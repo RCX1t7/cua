@@ -978,6 +978,22 @@ impl MediaSession {
         }
     }
 
+    /// An input worker calls this after its socket closes and its final native
+    /// dispatch returns. Hold the viewer list while releasing, so a reconnect
+    /// cannot acquire fresh input between the idle check and key/button ups.
+    /// Windows leases retain their dispatch state after release. Other native
+    /// backends need that same guarantee before using this reconnect path.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn release_input_if_idle(&self, input: &dyn InteractiveInputLease) {
+        let viewers = self
+            .viewers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if viewers.is_empty() {
+            input.release_all();
+        }
+    }
+
     fn set_capture_paused(&self, paused: bool) {
         if let Some(lease) = self
             .capture

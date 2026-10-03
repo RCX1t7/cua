@@ -696,18 +696,84 @@ impl ServiceManager for WindowsTask {
         Ok(())
     }
     fn state(&self) -> ServiceState {
-        let out = Command::new("schtasks")
-            .args(["/Query", "/TN", WINDOWS_TASK_NAME, "/FO", "CSV", "/NH"])
-            .output();
-        let (installed, text) = match out {
-            Ok(o) if o.status.success() => (true, String::from_utf8_lossy(&o.stdout).to_string()),
-            _ => (false, String::new()),
+        // schtasks' CSV Status field is localized (e.g. Running / 正在运行).
+        // Query exactly our registered task and return its numeric TASK_STATE,
+        // where 4 is running. No task is registered, started or changed here.
+        // https://learn.microsoft.com/windows/win32/api/taskschd/ne-taskschd-task_state
+        let script = r#"
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$name = $env:CUA_STATE_TASK_NAME
+$slash = $name.LastIndexOf('\')
+$path = '\'
+if ($slash -ge 0) {
+    $path = '\' + $name.Substring(0, $slash).Trim('\') + '\'
+    $name = $name.Substring($slash + 1)
+}
+try {
+    $task = Get-ScheduledTask -TaskPath $path -TaskName $name -ErrorAction Stop
+    [Console]::WriteLine([int]$task.State)
+} catch {
+    if ($_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') {
+        [Console]::WriteLine('absent')
+    } else {
+        [Console]::Error.WriteLine($_.Exception.Message)
+        exit 1
+    }
+}
+"#;
+        let powershell = std::env::var_os("SystemRoot")
+            .map(|root| PathBuf::from(root).join("System32/WindowsPowerShell/v1.0/powershell.exe"))
+            .unwrap_or_else(|| "powershell.exe".into());
+        let mut command = Command::new(powershell);
+        command
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .env("CUA_STATE_TASK_NAME", WINDOWS_TASK_NAME);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let (installed, running, detail) = match command.output() {
+            Ok(o) if o.status.success() => {
+                let text = String::from_utf8_lossy(&o.stdout);
+                match text.trim() {
+                    "absent" => (false, false, format!("{WINDOWS_TASK_NAME}: not installed")),
+                    code @ ("0" | "1" | "2" | "3" | "4") => {
+                        let status = match code {
+                            "1" => "disabled",
+                            "2" => "queued",
+                            "3" => "ready",
+                            "4" => "running",
+                            _ => "unknown",
+                        };
+                        (true, code == "4", format!("{WINDOWS_TASK_NAME}: {status}"))
+                    }
+                    _ => (
+                        false,
+                        false,
+                        format!("{WINDOWS_TASK_NAME}: invalid task-state response"),
+                    ),
+                }
+            }
+            Ok(o) => (
+                false,
+                false,
+                format!(
+                    "{WINDOWS_TASK_NAME}: task query failed: {}",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ),
+            ),
+            Err(e) => (
+                false,
+                false,
+                format!("{WINDOWS_TASK_NAME}: could not query task: {e}"),
+            ),
         };
         ServiceState {
             installed,
-            running: text.contains("Running"),
+            running,
             kind: "windows-task".into(),
-            detail: text.trim().to_string(),
+            detail,
         }
     }
 }

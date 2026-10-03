@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Cua AI, Inc.
 
 import type { DisplayStyle, DisplayStyleSource } from "../native/types";
+import { hostOs } from "../model/host";
 
 interface DevDisplayToggleProps {
   style: DisplayStyle;
@@ -21,7 +22,7 @@ export function DevDisplayToggle({ style, source, onChange }: DevDisplayTogglePr
       className="dev-toggle"
       data-owns-enter
       onClick={() => onChange(next)}
-      title={`Display style: ${style} (${source}). Click or press ⌘⇧D to preview ${next}.`}
+      title={`Display style: ${style} (${source}). Click or press ${hostOs() === "macos" ? "⌘⇧D" : "Ctrl+Shift+D"} to preview ${next}.`}
       aria-label={`Development display toggle. Currently ${style}. Switch to ${next}.`}
     >
       <span className="dev-toggle-dot" aria-hidden="true" />

@@ -9,7 +9,7 @@
 //! whose native sessions live in the cua-driver platform crates:
 //!
 //! - interactive media-plane batches: `platform_macos::input::interactive` and
-//!   `platform_linux::input::interactive`;
+//!   `platform_linux::input::interactive` and `platform_windows::input::interactive`;
 //! - targeted one-shot pointer/keyboard delivery (Linux gRPC Computer service
 //!   and media-plane actions): `platform_linux::input::targeted`;
 //! - everything else goes through the cua-driver tool registry.
@@ -17,16 +17,12 @@
 //! What stays here is targeting (catalog handles → native ids), leases,
 //! session policy, and error mapping.
 
-// Windows has no cua-driver interactive session yet; only the policy and
-// error mapping are used there.
-#![cfg_attr(target_os = "windows", allow(dead_code))]
-
 use cua_driver_core::interactive_input as drv;
 use cua_media_protocol::{
     InputGesturePhase, InputKeyState, InputModifier, InputPointerButton, InputPointerPhase,
     InteractiveInputBatch, InteractiveInputEvent, SessionPolicy,
 };
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use cua_spacesd_provider_api::InteractiveInputLease;
 use cua_spacesd_provider_api::{InteractiveInputOutcome, ProviderError, ProviderErrorCode};
 
@@ -223,6 +219,34 @@ impl InteractiveInputLease for MacosLease {
             .dispatch(driver_batch(batch)?)
             .map(outcome)
             .map_err(interactive_error)
+    }
+}
+
+/// An interactive lease over one cua-driver Windows input session.
+#[cfg(target_os = "windows")]
+pub(crate) struct WindowsLease {
+    pub(crate) session: platform_windows::input::InteractiveInputSession,
+    pub(crate) validate: Box<dyn Fn() -> Result<(), ProviderError> + Send + Sync>,
+}
+
+#[cfg(target_os = "windows")]
+impl InteractiveInputLease for WindowsLease {
+    fn dispatch(
+        &self,
+        batch: &InteractiveInputBatch,
+    ) -> Result<InteractiveInputOutcome, ProviderError> {
+        if let Err(error) = (self.validate)() {
+            self.session.release_all();
+            return Err(error);
+        }
+        self.session
+            .dispatch(&driver_batch(batch)?)
+            .map(outcome)
+            .map_err(interactive_error)
+    }
+
+    fn release_all(&self) {
+        self.session.release_all();
     }
 }
 

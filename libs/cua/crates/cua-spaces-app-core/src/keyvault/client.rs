@@ -18,12 +18,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub use cua_keyvault::Zeroizing;
 use cua_keyvault::broker::{
     ApproveOptions, InitRequest, Inventory, ItemPage, LockOutcome, Status, UnlockRequest,
 };
 use cua_keyvault::ipc::{Request, VerificationView};
 use cua_keyvault::model::Grant;
+pub use cua_keyvault::Zeroizing;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -110,7 +110,7 @@ impl SocketTransport {
 #[async_trait::async_trait]
 impl KvTransport for SocketTransport {
     async fn call(&self, req: Request) -> Result<Value, KvFailure> {
-        #[cfg(unix)]
+        #[cfg(any(unix, target_os = "windows"))]
         {
             use cua_keyvault::client::{ConnectError, KeyvaultClient, ServerCheck};
             let mut client = KeyvaultClient::connect(&self.path, ServerCheck::default_for_build())
@@ -122,13 +122,18 @@ impl KvTransport for SocketTransport {
                             .into(),
                     },
                     ConnectError::Impostor { who, .. } => KvFailure {
-                        code: "impostor".into(),
-                        message: format!(
+                        code: if cfg!(target_os = "windows") { "unverified_broker" } else { "impostor" }.into(),
+                        message: if cfg!(target_os = "windows") {
+                            format!("The Windows Keyvault broker's running-code identity is not attested ({who}). \
+                                A signed executable file alone does not prove the live broker's authority. \
+                                Keyvault is unavailable in this port until that identity boundary is supported; \
+                                your OS credentials have not been accessed.")
+                        } else { format!(
                             "The process serving the Keyvault ({who}) is not signed by Cua, so \
                              Cua will not talk to it and the Keyvault is off. Use the signed Cua \
                              Spaces app and the cua it ships; local and ad hoc signed builds \
                              cannot use the Keyvault."
-                        ),
+                        ) },
                     },
                     ConnectError::Other(m) => KvFailure {
                         code: "connect".into(),
@@ -140,7 +145,7 @@ impl KvTransport for SocketTransport {
                 .await
                 .map_err(|e| KvFailure::from_error(&e))
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, target_os = "windows")))]
         {
             let _ = req;
             Err(KvFailure {

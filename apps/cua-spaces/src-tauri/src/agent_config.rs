@@ -155,14 +155,17 @@ pub fn list_teleportable_apps() -> Vec<TeleportAppInfo> {
 }
 
 #[tauri::command]
-pub fn set_teleport_policy(
+pub async fn set_teleport_policy(
     app: String,
     allow_sensitive: bool,
     allow_non_sensitive: bool,
 ) -> Result<(), String> {
     // Changing an unattended-teleport allowance must be authorized by the device
     // owner, so it can't be silently loosened.
-    crate::biometric::authorize(&format!("change unattended-teleport permissions for {app}"))?;
+    let reason = format!("change unattended-teleport permissions for {app}");
+    tokio::task::spawn_blocking(move || crate::biometric::authorize(&reason))
+        .await
+        .map_err(|e| e.to_string())??;
     let mut map = read_policy_map();
     map.insert(
         app,

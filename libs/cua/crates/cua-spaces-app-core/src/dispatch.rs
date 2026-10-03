@@ -131,6 +131,7 @@ pub const METHODS: &[&str] = &[
     "keyvault.list",
     "keyvault.vaultReduce",
     "keyvault.vaultView",
+    "keyvault.vaultSource",
     "keyvault.unlockPrompt",
     "keyvault.deleteConfirm",
     "keyvault.labels",
@@ -534,6 +535,10 @@ pub fn call_value(method: &str, args: Value) -> Result<Value, CoreError> {
             &a.get("overview")?,
             &a.get("state")?,
             a.get("now")?,
+        )),
+        "keyvault.vaultSource" => out(vault::vault_source(
+            &a.get("overview")?,
+            &a.get::<String>("providerId")?,
         )),
         "keyvault.unlockPrompt" => out(vault::unlock_prompt(
             &a.get("overview")?,
