@@ -233,11 +233,28 @@ async function currentWindow() {
   return getCurrentWindow();
 }
 
+function StreamFailureNotice({ inputError, serverError, onDismiss }: {
+  inputError: string | null;
+  serverError: string | null;
+  onDismiss: () => void;
+}) {
+  if (!inputError && !serverError) return null;
+  return <div className="window-stream-notice" role="alert">
+    <div>
+      {inputError && <p>Input delivery failed. {inputError}</p>}
+      {serverError && <p>A stream operation failed. {serverError}</p>}
+    </div>
+    <button type="button" className="ghost-button" onClick={onDismiss}>Dismiss</button>
+  </div>;
+}
+
 function SingleWindowStream({ fleet, config }: { fleet: FleetBridge; config: ViewerConfig }) {
   const target = config.targetWindow!;
   const space = config.space;
   const [status, setStatus] = useState<MediaStatus>("connecting");
   const [detail, setDetail] = useState<string | undefined>(undefined);
+  const [inputError, setInputError] = useState<string | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
   const sessionRef = useRef<MediaSession | null>(null);
   // Anti-feedback: the size we last applied/observed, and a guard while a
@@ -324,8 +341,14 @@ function SingleWindowStream({ fleet, config }: { fleet: FleetBridge; config: Vie
             onStatus={(s, d) => {
               setStatus(s);
               setDetail(d);
+              if (s === "connecting" || s === "reconnecting") {
+                setInputError(null);
+                setServerError(null);
+              }
             }}
             onOpened={(opened) => {
+              setInputError(null);
+              setServerError(null);
               const scale = opened.geometry?.scale_factor ?? 1;
               if (opened.geometry) sizeHostTo(opened.geometry.width_px, opened.geometry.height_px, scale);
               console.info(`[Cua Spaces] stream window attached to media session ${opened.session_id}`);
@@ -344,6 +367,17 @@ function SingleWindowStream({ fleet, config }: { fleet: FleetBridge; config: Vie
               const scale = sessionRef.current?.sessionOpened?.geometry?.scale_factor ?? 1;
               sizeHostTo(w, h, scale);
             }}
+            onServerError={(error) => {
+              setServerError(`${String(error.code ?? "stream_error")}: ${String(error.message ?? "The server did not provide a reason.")}`);
+            }}
+            onInputAcknowledgement={(result) => {
+              if (!result.delivered) {
+                setInputError(`${result.error?.code ?? "delivery_failed"}: ${result.error?.message ?? "The server did not provide a reason."}`);
+              }
+              // Later accepted input does not undo an earlier failed event or
+              // prove that the remote app changed. Keep the refusal visible
+              // until dismissed or a new session starts.
+            }}
             onGone={() => {
               // The dedicated remote window closed: close this OS window too.
               void currentWindow()
@@ -354,6 +388,10 @@ function SingleWindowStream({ fleet, config }: { fleet: FleetBridge; config: Vie
           <PresenceOverlay spaceId={space.id} windowId={target.id} interactive={!replica} live={status === "streaming"} />
         </div>
       </div>
+      <StreamFailureNotice inputError={inputError} serverError={serverError} onDismiss={() => {
+        setInputError(null);
+        setServerError(null);
+      }} />
       {status !== "streaming" && (
         <div className="window-stream-status">
           {status === "failed" || status === "ended" ? (
@@ -459,6 +497,8 @@ function WindowPanel({
   const [pos, setPos] = useState({ x: 30 + ((index * 40) % 300), y: 24 + ((index * 36) % 220) });
   const [title, setTitle] = useState(win.title);
   const [badge, setBadge] = useState("");
+  const [inputError, setInputError] = useState<string | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
   const [closed, setClosed] = useState(false);
   const [z, setZ] = useState(1);
   const sessionRef = useRef<MediaSession | null>(null);
@@ -509,10 +549,32 @@ function WindowPanel({
           sessionRef.current = s;
         }}
         onTitle={setTitle}
-        onStatus={(s) => setBadge(s === "streaming" ? "" : s)}
+        onStatus={(s) => {
+          setBadge(s === "streaming" ? "" : s);
+          if (s === "connecting" || s === "reconnecting") {
+            setInputError(null);
+            setServerError(null);
+          }
+        }}
+        onOpened={() => {
+          setInputError(null);
+          setServerError(null);
+        }}
+        onServerError={(error) => {
+          setServerError(`${String(error.code ?? "stream_error")}: ${String(error.message ?? "The server did not provide a reason.")}`);
+        }}
+        onInputAcknowledgement={(result) => {
+          if (!result.delivered) {
+            setInputError(`${result.error?.code ?? "delivery_failed"}: ${result.error?.message ?? "The server did not provide a reason."}`);
+          }
+        }}
         onGone={() => setClosed(true)}
       />
       <PresenceOverlay spaceId={spaceId} windowId={win.id} interactive live={!badge} />
+      <StreamFailureNotice inputError={inputError} serverError={serverError} onDismiss={() => {
+        setInputError(null);
+        setServerError(null);
+      }} />
     </div>
   );
 }

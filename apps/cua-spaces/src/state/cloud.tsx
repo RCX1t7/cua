@@ -186,6 +186,17 @@ export function useFleetSync(
         createsRef.current,
         rowsRef.current.map((row) => rowToSpace(row, 0)),
       );
+    } catch (error) {
+      // Preserve saved entries when the bridge/daemon fails, but retire the
+      // last successful connection claim. A later successful refresh replaces
+      // these rows and clears the error without deleting any saved address.
+      const reason = error instanceof Error ? error.message : String(error);
+      rowsRef.current = rowsRef.current.map((row) => ({
+        ...row,
+        reachable: false,
+        error: reason || "The connection check failed.",
+      }));
+      throw error;
     } finally {
       publish();
     }

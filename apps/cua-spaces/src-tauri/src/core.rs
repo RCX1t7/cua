@@ -1291,10 +1291,21 @@ impl AppCore {
         let rows = futures_util::future::join_all(infos.into_iter().map(|info| {
             let spaces = spaces.clone();
             async move {
-                match tokio::time::timeout(LIST_PROBE, spaces.space(&info.id)).await {
+                // `space` may return a cached client. A saved registry entry
+                // and a previous handshake do not prove that it still answers.
+                let probe = async {
+                    let space = spaces.space(&info.id).await.map_err(msg)?;
+                    if space.has_spacesd() {
+                        space.spacesd().map_err(msg)?.health().await.map_err(msg)?;
+                    }
+                    // Plain MCP Spaces have no SystemService; retain their
+                    // existing connection path rather than issuing an env RPC.
+                    Ok::<Space, String>(space)
+                };
+                match tokio::time::timeout(LIST_PROBE, probe).await {
                     Ok(Ok(space)) => SpaceRow::connected(info, &space),
                     Ok(Err(e)) => SpaceRow {
-                        error: Some(e.to_string()),
+                        error: Some(e),
                         ..SpaceRow::from_info(info)
                     },
                     Err(_) => SpaceRow {

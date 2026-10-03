@@ -220,3 +220,33 @@ guest window still require separate validation.
 
 This is an unsigned development port, not an official Windows release. No
 installer or host service was installed to perform these checks.
+
+## User workflow completion (2026-10-03)
+
+The current feature batch fixes stale connection indicators, displays real
+input/stream refusals in single- and multi-window viewers, and adds native
+folder selection plus verified selected-item transfer progress. Failed batches
+retain completed receipts; an explicit retry sends only failed and remaining
+items. An interrupted folder may have partial writes, so the UI does not claim
+rollback or invent byte progress. Transfer state survives changing tabs and
+uses a synchronous per-Space lock to prevent duplicate submissions.
+
+Saved addresses and desktop-media connections are separate: a successful
+cached client no longer proves server reachability, and manually disconnecting
+a viewer does not delete its Space. A desktop is labelled connected only
+after an actual frame callback. Source-level fixes and a successful build do
+not certify the complete user workflow; final GUI end-to-end acceptance remains
+pending until an approved restricted Space is available.
+
+The earlier inventory claim that macOS hides the source window after a
+successful teleport was incorrect. The released macOS flow retains the app
+entry, not a source HWND, and leaves the original window unchanged. The Tauri
+drag ghost is likewise additive. This port does not introduce a Windows-only
+minimize/hide action to satisfy a feature the macOS release does not have.
+
+No unit tests are written or run for this batch, including existing suites.
+Only compilation is used to produce the candidate; final acceptance follows
+the real GUI workflow. The three user-approved wide-authority test services
+were stopped and will not be restarted by this work. Their credential files
+are retained; no new token use, host setup, VM installation, volume mount, or
+system security/network change is authorized by the feature fixes.

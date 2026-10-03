@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: FSL-1.1-MIT
 // Copyright (c) 2026 Cua AI, Inc.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { MediaStatus } from "@cua/spacesd-html5/core/mediaSession";
 import { getScreenshot, rememberScreenshot } from "../model/screenshotCache";
@@ -35,6 +35,26 @@ export function DesktopPreview({
   const [lastFrame, setLastFrame] = useState(() => getScreenshot(spaceId)?.dataUrl ?? null);
   const [inputError, setInputError] = useState<string | null>(null);
   const [inputDelivered, setInputDelivered] = useState(false);
+  useEffect(() => {
+    // The detail component is reused when selection changes. Its previous
+    // frame, input acknowledgement and manual connection choice belong only
+    // to the previous Space.
+    const on = readSetting(AUTO_CONNECT_KEY, "true") !== "false";
+    setAutoConnect(on);
+    setRequested(on);
+    setStatus("connecting");
+    setDetail(undefined);
+    setFrameRendered(false);
+    setInputError(null);
+    setInputDelivered(false);
+    setLastFrame(getScreenshot(spaceId)?.dataUrl ?? null);
+  }, [spaceId]);
+  useEffect(() => {
+    if (!available) {
+      setFrameRendered(false);
+      setInputDelivered(false);
+    }
+  }, [available]);
   const active = available && requested;
   const live = active && status === "streaming" && frameRendered;
   const open = useMemo(
@@ -56,6 +76,16 @@ export function DesktopPreview({
     : status === "reconnecting" ? "Reconnecting to the desktop…"
     : status === "streaming" && !frameRendered ? "Waiting for the first desktop frame…"
     : `Connecting to ${spaceName}…`;
+  // The saved server's reachability and this desktop media connection are
+  // different facts: disconnecting the viewer does not remove the server.
+  const connection = !available ? "Desktop unavailable"
+    : !requested ? "Desktop disconnected"
+    : live ? "Desktop connected"
+    : status === "reconnecting" ? "Desktop reconnecting"
+    : status === "failed" ? "Desktop connection failed"
+    : status === "ended" ? "Desktop disconnected"
+    : status === "streaming" ? "Waiting for a desktop frame"
+    : "Desktop connecting";
 
   return (
     <div data-stream-status={active ? status : "disconnected"} data-frame-rendered={live}>
@@ -115,6 +145,7 @@ export function DesktopPreview({
           }} />
           <span>Auto-connect to desktops</span>
         </label>
+        <span role="status" data-desktop-connected={live}>{connection}</span>
         {active && <button type="button" className="dw-btn" onClick={() => setRequested(false)}>Disconnect</button>}
         {live && <span role="status">{inputDelivered ? "Input accepted by the host" : "Click the desktop to control it"}</span>}
       </div>
